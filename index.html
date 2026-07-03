@@ -131,8 +131,9 @@
   .day-head .date{font-size:12px; color:var(--ink-soft);}
 
   .activity{
-    border-top:1px dashed var(--line); padding:10px 0; margin-top:8px;
+    border-top:1px dashed var(--line); padding:10px 0; margin-top:8px; cursor:pointer;
   }
+  .activity:active{background:var(--paper-dark);}
   .activity:first-of-type{border-top:none; margin-top:4px; padding-top:2px;}
   .activity-time{font-size:12px; font-weight:700; color:var(--rust);}
   .activity-title{font-size:15px; font-weight:700; margin:2px 0 2px;}
@@ -158,6 +159,7 @@
   .checklist-item input[type=checkbox]{width:19px; height:19px; margin-top:1px; accent-color:var(--teal); flex-shrink:0;}
   .checklist-item .txt{flex:1; font-size:14px; line-height:1.4;}
   .checklist-item.done .txt{text-decoration:line-through; color:var(--ink-soft);}
+  .del{background:none; border:none; color:var(--ink-soft); font-size:18px; cursor:pointer; padding:0 4px; line-height:1;}
   .checklist-item .del{background:none; border:none; color:var(--ink-soft); font-size:16px; cursor:pointer; padding:0 4px;}
 
   .contact-row{display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-top:1px dashed var(--line);}
@@ -212,7 +214,8 @@
   .toast.show{opacity:1; transform:translateX(-50%) translateY(-4px);}
 
   .places-table{border-collapse:collapse; width:100%; font-size:12.5px;}
-  .places-table th{text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; position:sticky; top:0; background:var(--card);}
+  .places-table th{text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-soft); padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; position:sticky; top:0; background:var(--card); cursor:pointer; user-select:none;}
+  .places-table th:active{color:var(--rust);}
   .places-table td{padding:9px 10px; border-bottom:1px dashed var(--line); max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .places-table tbody tr{cursor:pointer;}
   .places-table tbody tr:active{background:var(--paper-dark);}
@@ -276,7 +279,7 @@
     <!-- DAYS TAB -->
     <section class="tabpanel active" id="tab-days">
       <div id="daysList"></div>
-      <button class="btn btn-primary btn-block" onclick="openDayModal()">+ Add a day</button>
+      <button class="btn btn-primary btn-block" onclick="addDayDirect()">+ Add day</button>
     </section>
 
     <!-- CHECKLIST TAB -->
@@ -313,9 +316,7 @@
       <div class="card" style="padding:0; overflow:hidden;">
         <div style="overflow-x:auto; -webkit-overflow-scrolling:touch;">
           <table class="places-table">
-            <thead><tr>
-              <th>Name</th><th>Must do?</th><th>Type</th><th>Subtype</th><th>Area</th><th>Location</th><th>Tasks</th><th>Notes</th>
-            </tr></thead>
+            <thead id="placesThead"></thead>
             <tbody id="placesTbody"></tbody>
           </table>
         </div>
@@ -499,22 +500,6 @@ function openTripSettingsModal(){
       <div class="sync-status" id="syncStatus"></div>
     </div>
 
-    <details class="card" style="margin-top:12px;">
-      <summary style="font-weight:700; font-size:13px; cursor:pointer;">One-time Supabase table setup (SQL)</summary>
-      <p style="font-size:12px; color:var(--ink-soft); margin:8px 0 6px;">Already done if sync is working. Otherwise, run this once in your Supabase SQL editor:</p>
-      <textarea readonly style="font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; min-height:130px;">create table trailnotes_sync (
-  trip_code text primary key,
-  payload jsonb not null,
-  updated_at timestamptz default now()
-);
-
-alter table trailnotes_sync enable row level security;
-
-create policy "trailnotes anon access"
-on trailnotes_sync for all
-using (true) with check (true);</textarea>
-    </details>
-
     <div class="section-title">Backup & transfer</div>
     <div class="row">
       <button class="btn btn-ghost" onclick="exportData()">⬇ Export backup</button>
@@ -536,7 +521,8 @@ function saveTripSettings(){
     notes: document.getElementById('m-tripnotes').value
   };
   data.sync.code = document.getElementById('m-sbcode').value.trim();
-  persist(); renderHeader(); toast('Trip details saved');
+  generateDaysFromTripDates();
+  persist(); renderHeader(); renderDays(); toast('Trip details saved');
 }
 function modalSyncAction(fn){
   data.sync.code = document.getElementById('m-sbcode').value.trim();
@@ -551,117 +537,146 @@ function switchTripPrompt(){
 
 
 /* ---------- days & activities ---------- */
+function dayLabel(day, idx){
+  if(day.date){
+    const d = new Date(day.date+'T00:00:00');
+    return d.toLocaleDateString(undefined,{weekday:'short', month:'short', day:'numeric'});
+  }
+  return day.label || ('Day ' + (idx+1));
+}
+function sortedDays(){
+  return [...data.days].sort((a,b)=> (a.date||'9999-99-99').localeCompare(b.date||'9999-99-99'));
+}
 function renderDays(){
   const wrap = document.getElementById('daysList');
   if(!data.days.length){
     wrap.innerHTML = `<div class="empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18"/></svg>
-      <p>No days yet. Add one for each day of the trip, then fill in stops as you plan them.</p>
+      <p>Set your trip's start and end date (gear icon, top right) and days will appear here automatically — or add one manually below.</p>
     </div>`;
     return;
   }
-  wrap.innerHTML = data.days.map(day=>{
-    const acts = (day.activities||[]).map(a=>`
-      <div class="activity">
-        ${a.time?`<div class="activity-time">${escapeHtml(a.time)}</div>`:''}
-        <div class="activity-title">${escapeHtml(a.title)}</div>
-        ${a.address?`<div class="activity-detail">📍 ${escapeHtml(a.address)} ${a.gps?`· <a href="https://maps.google.com/?q=${encodeURIComponent(a.gps)}" target="_blank" rel="noopener">map</a>`:''}</div>`:''}
-        ${a.phone?`<div class="activity-detail">☎ <a href="tel:${escapeHtml(a.phone)}">${escapeHtml(a.phone)}</a></div>`:''}
-        ${a.notes?`<div class="activity-detail">${escapeHtml(a.notes)}</div>`:''}
-        ${a.backup?`<div class="tag-backup"><b>Backup plan:</b> ${escapeHtml(a.backup)}</div>`:''}
-        <div class="activity-actions no-print">
-          <button class="btn btn-ghost btn-sm" onclick="openActivityModal('${day.id}','${a.id}')">Edit</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteActivity('${day.id}','${a.id}')">Delete</button>
-        </div>
-      </div>`).join('');
+  wrap.innerHTML = sortedDays().map((day, idx)=>{
+    const blocks = (day.activities||[]).map(b=>{
+      if(b.placeId){
+        const p = data.places.find(pl=>pl.id===b.placeId);
+        if(!p){
+          return `<div class="activity" onclick="openBlockModal('${day.id}','${b.id}')">
+            ${b.time?`<div class="activity-time">${escapeHtml(b.time)}</div>`:''}
+            <div class="activity-detail">(Linked place was deleted)</div>
+          </div>`;
+        }
+        return `<div class="activity" onclick="openBlockModal('${day.id}','${b.id}')">
+          ${b.time?`<div class="activity-time">${escapeHtml(b.time)}</div>`:''}
+          <div class="activity-title">${escapeHtml(p.name)}${p.mustDo?` <span class="mustdo-pill mustdo-${p.mustDo.toLowerCase()}">${escapeHtml(p.mustDo)}</span>`:''}</div>
+          ${(p.type||p.subtype)?`<div class="activity-detail">${escapeHtml([p.type,p.subtype].filter(Boolean).join(' · '))}</div>`:''}
+          ${(p.area||p.location)?`<div class="activity-detail">📍 ${escapeHtml([p.area,p.location].filter(Boolean).join(' — '))}</div>`:''}
+          ${b.text?`<div class="activity-detail">${escapeHtml(b.text)}</div>`:''}
+        </div>`;
+      }
+      return `<div class="activity" onclick="openBlockModal('${day.id}','${b.id}')">
+        ${b.time?`<div class="activity-time">${escapeHtml(b.time)}</div>`:''}
+        <div class="activity-detail" style="white-space:pre-wrap;">${escapeHtml(b.text||'')}</div>
+      </div>`;
+    }).join('');
     return `<div class="card day-card">
       <div class="day-head">
-        <span class="label">${escapeHtml(day.label)}</span>
-        <span class="date">${day.date?fmtDate(day.date):''}</span>
+        <span class="label">${escapeHtml(dayLabel(day, idx))}</span>
+        <button class="del no-print" onclick="deleteDay('${day.id}')" aria-label="Delete day">&times;</button>
       </div>
-      ${acts || '<div style="font-size:13px;color:var(--ink-soft);margin-top:8px;">No stops added yet</div>'}
-      <div class="row no-print" style="margin-top:12px;">
-        <button class="btn btn-ghost btn-sm" onclick="openActivityModal('${day.id}')">+ Add stop</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteDay('${day.id}')">Delete day</button>
-      </div>
+      ${blocks || '<div style="font-size:13px;color:var(--ink-soft);margin-top:8px;">Nothing planned yet</div>'}
+      <button class="btn btn-ghost btn-sm no-print" style="margin-top:10px;" onclick="openBlockModal('${day.id}')">+ Add block</button>
     </div>`;
   }).join('');
 }
 function escapeHtml(s){
   return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-
-function openDayModal(){
-  const html = `
-    <div class="modal-head"><h2>Add a day</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
-    <label>Label</label>
-    <input type="text" id="m-daylabel" placeholder="e.g. Day 1 — Arrival">
-    <label>Date (optional)</label>
-    <input type="date" id="m-daydate">
-    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="saveDay()">Save day</button>
-  `;
-  showModal(html);
+function generateDaysFromTripDates(){
+  if(!data.trip.start || !data.trip.end) return;
+  const start = new Date(data.trip.start+'T00:00:00');
+  const end = new Date(data.trip.end+'T00:00:00');
+  if(isNaN(start) || isNaN(end) || end < start) return;
+  const existingDates = new Set(data.days.map(d=>d.date).filter(Boolean));
+  let cur = new Date(start);
+  while(cur <= end){
+    const iso = cur.toISOString().slice(0,10);
+    if(!existingDates.has(iso)){
+      data.days.push({id:cid(), label:'', date:iso, activities:[]});
+    }
+    cur.setDate(cur.getDate()+1);
+  }
 }
-function saveDay(){
-  const label = document.getElementById('m-daylabel').value.trim() || ('Day ' + (data.days.length+1));
-  const date = document.getElementById('m-daydate').value;
-  data.days.push({id:cid(), label, date, activities:[]});
-  persist(); renderDays(); closeModal(); toast('Day added');
+function addDayDirect(){
+  const days = sortedDays();
+  const last = days[days.length-1];
+  let date = '';
+  if(last && last.date){
+    const d = new Date(last.date+'T00:00:00');
+    d.setDate(d.getDate()+1);
+    date = d.toISOString().slice(0,10);
+  } else if(!data.days.length && data.trip.start){
+    date = data.trip.start;
+  }
+  data.days.push({id:cid(), label:'', date, activities:[]});
+  persist(); renderDays(); toast('Day added');
 }
 function deleteDay(dayId){
-  if(!confirm('Delete this day and all its stops?')) return;
+  if(!confirm('Delete this day and everything planned in it?')) return;
   data.days = data.days.filter(d=>d.id!==dayId);
   persist(); renderDays();
 }
 
-function openActivityModal(dayId, actId){
+function openBlockModal(dayId, blockId){
   const day = data.days.find(d=>d.id===dayId);
-  const existing = actId ? day.activities.find(a=>a.id===actId) : null;
+  const existing = blockId ? day.activities.find(a=>a.id===blockId) : null;
+  const placeOptions = data.places.slice().sort((a,b)=>a.name.localeCompare(b.name))
+    .map(p=>`<option value="${p.id}" ${existing&&existing.placeId===p.id?'selected':''}>${escapeHtml(p.name)}${p.type?' — '+escapeHtml(p.type):''}</option>`).join('');
+  const hasPlace = existing && existing.placeId;
   const html = `
-    <div class="modal-head"><h2>${existing?'Edit stop':'Add stop'}</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
-    <label>Time</label>
-    <input type="time" id="m-time" value="${existing?existing.time||'':''}">
-    <label>Title</label>
-    <input type="text" id="m-title" placeholder="e.g. Haena State Park" value="${existing?escapeHtml(existing.title):''}">
-    <label>Address</label>
-    <input type="text" id="m-address" placeholder="Street address" value="${existing?escapeHtml(existing.address||''):''}">
-    <label>GPS coordinates (optional, more reliable offline)</label>
-    <input type="text" id="m-gps" placeholder="e.g. 22.2217, -159.5744" value="${existing?escapeHtml(existing.gps||''):''}">
-    <label>Phone</label>
-    <input type="tel" id="m-phone" placeholder="Reservation / venue phone" value="${existing?escapeHtml(existing.phone||''):''}">
-    <label>Notes</label>
-    <textarea id="m-notes" placeholder="Reservation number, hours, tips">${existing?escapeHtml(existing.notes||''):''}</textarea>
-    <label>Backup plan</label>
-    <textarea id="m-backup" placeholder="If this is closed / full / you're running late…">${existing?escapeHtml(existing.backup||''):''}</textarea>
-    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="saveActivity('${dayId}','${actId||''}')">Save stop</button>
+    <div class="modal-head"><h2>${existing?'Edit block':'Add block'}</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <label>Time (optional)</label>
+    <input type="time" id="m-btime" value="${existing?existing.time||'':''}">
+    <label>Pull from Places (optional)</label>
+    <select id="m-bplace" onchange="updateBlockTextLabel()">
+      <option value="">— Free write —</option>
+      ${placeOptions}
+    </select>
+    <label id="m-btext-label">${hasPlace?'Notes (optional)':"What's the plan?"}</label>
+    <textarea id="m-btext" placeholder="${hasPlace?'Anything extra for this stop':'Free write anything you want here'}">${existing?escapeHtml(existing.text||''):''}</textarea>
+    <div class="row" style="margin-top:14px;">
+      ${existing?`<button class="btn btn-danger" onclick="deleteBlock('${dayId}','${existing.id}')">Delete</button>`:''}
+      <button class="btn btn-primary" onclick="saveBlock('${dayId}','${existing?existing.id:''}')">Save block</button>
+    </div>
   `;
   showModal(html);
 }
-function saveActivity(dayId, actId){
+function updateBlockTextLabel(){
+  const sel = document.getElementById('m-bplace');
+  document.getElementById('m-btext-label').textContent = sel.value ? 'Notes (optional)' : "What's the plan?";
+}
+function saveBlock(dayId, blockId){
   const day = data.days.find(d=>d.id===dayId);
+  const placeId = document.getElementById('m-bplace').value || null;
   const obj = {
-    id: actId || cid(),
-    time: document.getElementById('m-time').value,
-    title: document.getElementById('m-title').value.trim() || 'Untitled stop',
-    address: document.getElementById('m-address').value.trim(),
-    gps: document.getElementById('m-gps').value.trim(),
-    phone: document.getElementById('m-phone').value.trim(),
-    notes: document.getElementById('m-notes').value.trim(),
-    backup: document.getElementById('m-backup').value.trim(),
+    id: blockId || cid(),
+    time: document.getElementById('m-btime').value,
+    placeId,
+    text: document.getElementById('m-btext').value.trim()
   };
-  if(actId){
-    const idx = day.activities.findIndex(a=>a.id===actId);
+  if(blockId){
+    const idx = day.activities.findIndex(a=>a.id===blockId);
     day.activities[idx] = obj;
   } else {
     day.activities.push(obj);
   }
   day.activities.sort((a,b)=> (a.time||'99:99').localeCompare(b.time||'99:99'));
-  persist(); renderDays(); closeModal(); toast('Stop saved');
+  persist(); renderDays(); closeModal(); toast('Saved');
 }
-function deleteActivity(dayId, actId){
+function deleteBlock(dayId, blockId){
   const day = data.days.find(d=>d.id===dayId);
-  day.activities = day.activities.filter(a=>a.id!==actId);
-  persist(); renderDays();
+  day.activities = day.activities.filter(a=>a.id!==blockId);
+  persist(); renderDays(); closeModal();
 }
 
 /* ---------- checklist ---------- */
@@ -760,6 +775,29 @@ function closeModal(){
 }
 
 /* ---------- places ---------- */
+const PLACE_COLUMNS = [
+  {key:'name', label:'Name'},
+  {key:'mustDo', label:'Must do?'},
+  {key:'type', label:'Type'},
+  {key:'subtype', label:'Subtype'},
+  {key:'area', label:'Area'},
+  {key:'location', label:'Location'},
+  {key:'tasks', label:'Tasks'},
+  {key:'notes', label:'Notes'}
+];
+let placesSort = {col:'name', dir:1};
+function sortPlacesBy(col){
+  if(placesSort.col===col) placesSort.dir *= -1;
+  else { placesSort.col = col; placesSort.dir = 1; }
+  renderPlaces();
+}
+function renderPlacesHeader(){
+  const thead = document.getElementById('placesThead');
+  thead.innerHTML = '<tr>' + PLACE_COLUMNS.map(c=>{
+    const arrow = placesSort.col===c.key ? (placesSort.dir===1?' ▲':' ▼') : '';
+    return `<th onclick="sortPlacesBy('${c.key}')">${c.label}${arrow}</th>`;
+  }).join('') + '</tr>';
+}
 function populateFilterTypeOptions(){
   const sel = document.getElementById('pf-type');
   const current = sel.value;
@@ -767,6 +805,7 @@ function populateFilterTypeOptions(){
   sel.value = data.placeTypes.includes(current) ? current : '';
 }
 function renderPlaces(){
+  renderPlacesHeader();
   const mustdo = document.getElementById('pf-mustdo').value;
   const type = document.getElementById('pf-type').value;
   const area = document.getElementById('pf-area').value.trim().toLowerCase();
@@ -780,6 +819,19 @@ function renderPlaces(){
       if(!hay.includes(search)) return false;
     }
     return true;
+  });
+  const mustDoOrder = {Yes:0, Maybe:1, Meh:2, '':3};
+  rows.sort((a,b)=>{
+    let av, bv;
+    if(placesSort.col==='mustDo'){
+      av = mustDoOrder[a.mustDo||'']; bv = mustDoOrder[b.mustDo||''];
+    } else {
+      av = (a[placesSort.col]||'').toString().toLowerCase();
+      bv = (b[placesSort.col]||'').toString().toLowerCase();
+    }
+    if(av<bv) return -1*placesSort.dir;
+    if(av>bv) return 1*placesSort.dir;
+    return a.name.localeCompare(b.name);
   });
   const tbody = document.getElementById('placesTbody');
   if(!rows.length){
