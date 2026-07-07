@@ -154,6 +154,7 @@
   .cal-block.is-free{background:var(--rust-dark);}
   .cal-block-title{font-weight:700; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .cal-block-sub{font-size:10.5px; opacity:0.88; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .cal-block-map{position:absolute; top:2px; right:5px; font-size:11px; text-decoration:none; line-height:1;}
   .day-head .label{font-size:16px; font-weight:700;}
   .day-head .date{font-size:12px; color:var(--ink-soft);}
 
@@ -334,6 +335,10 @@
 
     <!-- PLACES TAB -->
     <section class="tabpanel" id="tab-places">
+      <div class="row" style="align-items:center; margin-bottom:10px;">
+        <div class="section-title" style="margin:0; flex:1;">Places</div>
+        <button class="btn btn-primary btn-sm" style="flex:0 0 auto;" onclick="openPlaceModal()">+ Add place</button>
+      </div>
       <div class="card filter-card">
         <div class="row">
           <select id="pf-mustdo" onchange="renderPlaces()">
@@ -359,7 +364,6 @@
           </table>
         </div>
       </div>
-      <button class="btn btn-primary btn-block" onclick="openPlaceModal()">+ Add place</button>
     </section>
 
     <!-- INFO TAB -->
@@ -693,7 +697,8 @@ function blockInnerHtml(b){
   if(b.placeId){
     const p = data.places.find(pl=>pl.id===b.placeId);
     if(!p) return `<div class="cal-block-title">(Place removed)</div>`;
-    return `<div class="cal-block-title">${escapeHtml(p.name)}</div>${p.area?`<div class="cal-block-sub">${escapeHtml(p.area)}</div>`:''}`;
+    return `<a class="cal-block-map" href="${placeMapUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Google Maps">🗺</a>
+      <div class="cal-block-title">${escapeHtml(p.name)}</div>${p.area?`<div class="cal-block-sub">${escapeHtml(p.area)}</div>`:''}`;
   }
   return `<div class="cal-block-title">${escapeHtml((b.text||'Note').split('\n')[0])}</div>`;
 }
@@ -704,6 +709,7 @@ function renderUnscheduledCardHtml(dayId, b){
     return `<div class="activity" onclick="openBlockModal('${dayId}','${b.id}')">
       <div class="activity-title">${escapeHtml(p.name)}</div>
       ${(p.type||p.subtype)?`<div class="activity-detail">${escapeHtml([p.type,p.subtype].filter(Boolean).join(' · '))}</div>`:''}
+      ${(p.area||p.location)?`<div class="activity-detail">📍 ${escapeHtml([p.area,p.location].filter(Boolean).join(' — '))} <a href="${placeMapUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="text-decoration:none;">🗺</a></div>`:''}
       ${b.text?`<div class="activity-detail">${escapeHtml(b.text)}</div>`:''}
     </div>`;
   }
@@ -1056,7 +1062,7 @@ function renderPlaces(){
       <td>${escapeHtml(p.type||'')}</td>
       <td>${escapeHtml(p.subtype||'')}</td>
       <td>${escapeHtml(p.area||'')}</td>
-      <td>${escapeHtml(p.location||'')}</td>
+      <td>${escapeHtml(p.location||'')} <a href="${placeMapUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Google Maps" style="text-decoration:none;">🗺</a></td>
       <td>${escapeHtml(p.tasks||'')}</td>
       <td>${escapeHtml(p.notes||'')}</td>
     </tr>
@@ -1103,6 +1109,9 @@ function openPlaceModal(id){
     <input type="text" id="m-parea" placeholder="e.g. North Shore" value="${existing?escapeHtml(existing.area||''):''}">
     <label>Specific location</label>
     <input type="text" id="m-plocation" placeholder="Address, trailhead, landmark…" value="${existing?escapeHtml(existing.location||''):''}">
+    <label>Google Maps link (optional)</label>
+    <input type="text" id="m-pmapsurl" placeholder="Paste a Google Maps share link — or leave blank to auto-search" value="${existing?escapeHtml(existing.mapsUrl||''):''}">
+    <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="openPlaceOnMap('${existing?existing.id:''}')">🗺 Open in Google Maps</button>
     <label>Tasks</label>
     <textarea id="m-ptasks" placeholder="e.g. Book permit, reserve parking">${existing?escapeHtml(existing.tasks||''):''}</textarea>
     <label>Notes</label>
@@ -1115,6 +1124,28 @@ function openPlaceModal(id){
   showModal(html);
   populateTypeSelect(document.getElementById('m-ptype'), existing?existing.type:(data.placeTypes[0]||''));
 }
+function placeMapUrl(p){
+  if(p.mapsUrl) return p.mapsUrl;
+  const q = [p.name, p.location, p.area].filter(Boolean).join(', ');
+  return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q);
+}
+function openPlaceOnMap(id){
+  // Uses whatever is currently typed in the modal fields, even before saving.
+  const nameEl = document.getElementById('m-pname');
+  const locEl = document.getElementById('m-plocation');
+  const areaEl = document.getElementById('m-parea');
+  const urlEl = document.getElementById('m-pmapsurl');
+  const draft = {
+    name: nameEl?nameEl.value.trim():'',
+    location: locEl?locEl.value.trim():'',
+    area: areaEl?areaEl.value.trim():'',
+    mapsUrl: urlEl?urlEl.value.trim():''
+  };
+  if(!draft.name && !draft.location && !draft.area && !draft.mapsUrl){
+    toast('Add a name, area, or location first'); return;
+  }
+  window.open(placeMapUrl(draft), '_blank', 'noopener');
+}
 function savePlace(id){
   const typeSel = document.getElementById('m-ptype').value;
   const obj = {
@@ -1125,6 +1156,7 @@ function savePlace(id){
     subtype: document.getElementById('m-psubtype').value.trim(),
     area: document.getElementById('m-parea').value.trim(),
     location: document.getElementById('m-plocation').value.trim(),
+    mapsUrl: document.getElementById('m-pmapsurl').value.trim(),
     tasks: document.getElementById('m-ptasks').value.trim(),
     notes: document.getElementById('m-pnotes').value.trim(),
   };
