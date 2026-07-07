@@ -148,10 +148,10 @@
   .cal-block{
     position:absolute; left:54px; right:6px; background:var(--teal); color:#fff;
     border-radius:8px; padding:4px 8px; font-size:11.5px; overflow:hidden;
-    cursor:pointer; z-index:2; box-shadow:0 1px 2px rgba(0,0,0,0.15);
+    cursor:grab; z-index:2; box-shadow:0 1px 2px rgba(0,0,0,0.15); touch-action:none;
+    transition:box-shadow .15s;
   }
-  .cal-block.is-place{background:var(--teal);}
-  .cal-block.is-free{background:var(--rust-dark);}
+  .cal-block.dragging{cursor:grabbing; z-index:4; box-shadow:0 4px 14px rgba(0,0,0,0.35); opacity:0.92;}
   .cal-block-title{font-weight:700; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .cal-block-sub{font-size:10.5px; opacity:0.88; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .cal-block-map{position:absolute; top:2px; right:5px; font-size:11px; text-decoration:none; line-height:1;}
@@ -977,13 +977,16 @@ svg.leaflet-image-layer.leaflet-interactive path {
     <!-- DAYS TAB -->
     <section class="tabpanel active" id="tab-days">
       <div class="day-switcher" id="daySwitcher"></div>
-      <div class="card" id="unscheduledCard" style="display:none;">
-        <div class="section-title" style="margin:0 0 8px;">Unscheduled</div>
-        <div id="unscheduledList"></div>
+      <div class="row no-print" style="margin-bottom:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="openDayTitleModal()">✎ Title this day</button>
       </div>
-      <small class="hint" id="calendarHint" style="display:block; margin-bottom:8px;">Tap an hour to add a quick block, or press and hold then drag to span multiple hours.</small>
+      <small class="hint" id="calendarHint" style="display:block; margin-bottom:8px;">Tap an hour for a quick block. Drag a block to reschedule it — press and hold empty space, then drag, to select multiple hours.</small>
       <div class="calendar-wrap">
         <div class="calendar-grid" id="calendarGrid"></div>
+      </div>
+      <div class="card" id="unscheduledCard" style="display:none; margin-top:12px;">
+        <div class="section-title" style="margin:0 0 8px;">Unscheduled</div>
+        <div id="unscheduledList"></div>
       </div>
       <div class="row no-print" style="margin-top:12px;">
         <button class="btn btn-ghost btn-sm" onclick="addDayDirect()">+ Add day</button>
@@ -1029,8 +1032,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
           </select>
         </div>
         <div class="row">
-          <input type="text" id="pf-area" placeholder="Filter by area…" oninput="renderPlaces()">
-          <input type="text" id="pf-search" placeholder="Search everything…" oninput="renderPlaces()">
+          <input type="text" id="pf-area" placeholder="Area — try North Shore; South Shore" oninput="renderPlaces()">
+          <input type="text" id="pf-search" placeholder="Search — try beach; hike" oninput="renderPlaces()">
         </div>
         <button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="resetPlaceFilters()">Reset filters</button>
       </div>
@@ -1329,11 +1332,30 @@ let blockPlaceSortMode = 'name';
 let pdState = {row:null, dragActive:false, startHour:null, endHour:null, dayId:null, x:0, y:0, timer:null};
 
 function dayLabel(day, idx){
-  if(day.date){
-    const d = new Date(day.date+'T00:00:00');
-    return d.toLocaleDateString(undefined,{weekday:'short', month:'short', day:'numeric'});
-  }
+  const dateStr = day.date ? new Date(day.date+'T00:00:00').toLocaleDateString(undefined,{weekday:'short', month:'short', day:'numeric'}) : '';
+  if(day.date && day.label) return `${dateStr} — ${day.label}`;
+  if(day.date) return dateStr;
   return day.label || ('Day ' + (idx+1));
+}
+function openDayTitleModal(){
+  if(!activeDayId) return;
+  const day = data.days.find(d=>d.id===activeDayId);
+  if(!day) return;
+  const html = `
+    <div class="modal-head"><h2>Title this day</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <label>Title (optional)</label>
+    <input type="text" id="m-daytitle" placeholder="e.g. Hiking Day" value="${escapeHtml(day.label||'')}">
+    <small class="hint">${day.date?"Shown alongside the date.":"Shown in place of a date, since this day doesn't have one."}</small>
+    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="saveDayTitle()">Save title</button>
+  `;
+  showModal(html);
+  setTimeout(()=>{ const f=document.getElementById('m-daytitle'); if(f){ f.focus(); f.select(); } }, 30);
+}
+function saveDayTitle(){
+  const day = data.days.find(d=>d.id===activeDayId);
+  if(!day) return;
+  day.label = document.getElementById('m-daytitle').value.trim();
+  persist(); renderDays(); closeModal(); toast('Title saved');
 }
 function sortedDays(){
   return [...data.days].sort((a,b)=> (a.date||'9999-99-99').localeCompare(b.date||'9999-99-99'));
@@ -1421,18 +1443,30 @@ function renderCalendar(){
     if(endMin<=startMin) endMin = startMin+30;
     const top = ((startMin/60) - GRID_START_HOUR) * ROW_HEIGHT;
     const height = Math.max(((endMin-startMin)/60) * ROW_HEIGHT - 2, 22);
-    blocksHtml += `<div class="cal-block ${b.placeId?'is-place':'is-free'}" style="top:${top}px; height:${height}px;" onclick="event.stopPropagation(); openBlockModal('${day.id}','${b.id}')">${blockInnerHtml(b)}</div>`;
+    const color = colorForBlock(b);
+    blocksHtml += `<div class="cal-block" data-day-id="${day.id}" data-block-id="${b.id}" style="top:${top}px; height:${height}px; background:${color};">${blockInnerHtml(b)}</div>`;
   });
 
   grid.style.height = (totalHours*ROW_HEIGHT)+'px';
   grid.innerHTML = rowsHtml + `<div class="cal-select-overlay" id="calSelectOverlay"></div>` + blocksHtml;
 }
 
+const TYPE_COLOR_PALETTE = ['#3E6259','#BD5B38','#5B6EA8','#8A6A17','#6E8B3D','#A34D74','#3C7A89','#9B4A2D','#4F6D4F','#7A5C99'];
+function colorForBlock(b){
+  if(!b.placeId) return '#5B6B5F'; // free-write blocks: neutral slate
+  const p = data.places.find(pl=>pl.id===b.placeId);
+  const type = p && p.type;
+  if(!type) return '#9B4A2D';
+  let hash = 0;
+  for(let i=0;i<type.length;i++){ hash = type.charCodeAt(i) + ((hash<<5)-hash); }
+  return TYPE_COLOR_PALETTE[Math.abs(hash) % TYPE_COLOR_PALETTE.length];
+}
+
 function blockInnerHtml(b){
   if(b.placeId){
     const p = data.places.find(pl=>pl.id===b.placeId);
     if(!p) return `<div class="cal-block-title">(Place removed)</div>`;
-    return `<a class="cal-block-map" href="${placeMapUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open in Google Maps">🗺</a>
+    return `<a class="cal-block-map" href="${placeMapUrl(p)}" target="_blank" rel="noopener" title="Open in Google Maps">🗺</a>
       <div class="cal-block-title">${escapeHtml(p.name)}</div>${p.area?`<div class="cal-block-sub">${escapeHtml(p.area)}</div>`:''}`;
   }
   return `<div class="cal-block-title">${escapeHtml((b.text||'Note').split('\n')[0])}</div>`;
@@ -1461,9 +1495,30 @@ function updateSelectionOverlay(){
   overlay.style.top = top+'px';
   overlay.style.height = height+'px';
 }
+let blockDragState = {active:false, dragging:false, el:null, dayId:null, blockId:null, startY:0, startTop:0, origStartMin:0, origEndMin:0};
 function initCalendarEvents(){
   const grid = document.getElementById('calendarGrid');
   grid.addEventListener('pointerdown', e=>{
+    if(e.target.closest && e.target.closest('a')) return; // let the map-icon link work natively
+
+    const blockEl = e.target.closest ? e.target.closest('.cal-block') : null;
+    if(blockEl){
+      const dayId = blockEl.dataset.dayId, blockId = blockEl.dataset.blockId;
+      const day = data.days.find(d=>d.id===dayId);
+      const b = day && day.activities.find(a=>a.id===blockId);
+      if(!b) return;
+      blockDragState.active = true;
+      blockDragState.dragging = false;
+      blockDragState.el = blockEl;
+      blockDragState.dayId = dayId;
+      blockDragState.blockId = blockId;
+      blockDragState.startY = e.clientY;
+      blockDragState.startTop = parseFloat(blockEl.style.top) || 0;
+      blockDragState.origStartMin = timeToMinutes(b.startTime);
+      blockDragState.origEndMin = b.endTime ? timeToMinutes(b.endTime) : blockDragState.origStartMin+60;
+      return;
+    }
+
     const row = e.target.closest ? e.target.closest('.hour-row') : null;
     if(!row) return;
     pdState.row = row;
@@ -1479,6 +1534,18 @@ function initCalendarEvents(){
     }, 220);
   });
   grid.addEventListener('pointermove', e=>{
+    if(blockDragState.active){
+      const dy = e.clientY - blockDragState.startY;
+      if(!blockDragState.dragging && Math.abs(dy) > 6){
+        blockDragState.dragging = true;
+        blockDragState.el.classList.add('dragging');
+      }
+      if(blockDragState.dragging){
+        e.preventDefault();
+        blockDragState.el.style.top = (blockDragState.startTop + dy) + 'px';
+      }
+      return;
+    }
     if(!pdState.row) return;
     const dx = e.clientX-pdState.x, dy = e.clientY-pdState.y;
     if(!pdState.dragActive){
@@ -1494,15 +1561,41 @@ function initCalendarEvents(){
     if(row){ pdState.endHour = parseInt(row.dataset.hour,10); updateSelectionOverlay(); }
   });
   window.addEventListener('pointerup', ()=>{
+    if(blockDragState.active){
+      const wasDragging = blockDragState.dragging;
+      const dayId = blockDragState.dayId, blockId = blockDragState.blockId;
+      if(wasDragging){
+        const day = data.days.find(d=>d.id===dayId);
+        const b = day && day.activities.find(a=>a.id===blockId);
+        if(b){
+          const finalTop = parseFloat(blockDragState.el.style.top) || 0;
+          const rawStartMin = GRID_START_HOUR*60 + (finalTop / ROW_HEIGHT) * 60;
+          let newStartMin = Math.round(rawStartMin / 30) * 30; // snap to nearest 30 min
+          const duration = blockDragState.origEndMin - blockDragState.origStartMin;
+          newStartMin = Math.max(GRID_START_HOUR*60, Math.min(newStartMin, GRID_END_HOUR*60 - duration));
+          b.startTime = minutesToTime(newStartMin);
+          b.endTime = minutesToTime(newStartMin + duration);
+          day.activities.sort((a,c)=>(a.startTime||'99:99').localeCompare(c.startTime||'99:99'));
+          persist();
+        }
+        blockDragState.el.classList.remove('dragging');
+        blockDragState.active = false; blockDragState.dragging = false;
+        renderCalendar();
+      } else {
+        blockDragState.active = false;
+        openBlockModal(dayId, blockId);
+      }
+      return;
+    }
     clearTimeout(pdState.timer);
     if(!pdState.row) return;
     const overlay = document.getElementById('calSelectOverlay');
     if(overlay) overlay.style.display='none';
     const s = Math.min(pdState.startHour, pdState.endHour);
     const en = Math.max(pdState.startHour, pdState.endHour)+1;
-    const dayId = pdState.dayId;
+    const dayId2 = pdState.dayId;
     pdState.row = null; pdState.dragActive = false;
-    openBlockModal(dayId, null, s, en);
+    openBlockModal(dayId2, null, s, en);
   });
 }
 
@@ -1574,8 +1667,7 @@ function confirmSwapDay(){
 function buildPlaceOptions(selectedId, filterText){
   let list = data.places.slice();
   if(filterText){
-    const f = filterText.trim().toLowerCase();
-    list = list.filter(p => [p.name,p.area,p.type,p.subtype,p.location].filter(Boolean).join(' ').toLowerCase().includes(f));
+    list = list.filter(p => matchesAnyTerm([p.name,p.area,p.type,p.subtype,p.location].filter(Boolean).join(' ').toLowerCase(), filterText));
   }
   if(blockPlaceSortMode==='area'){
     list.sort((a,b)=> (a.area||'').localeCompare(b.area||'') || a.name.localeCompare(b.name));
@@ -1604,21 +1696,53 @@ function refreshBlockPlaceOptions(){
   sel.value = current;
 }
 
+function parseTimeString(str){
+  if(!str) return null;
+  str = str.trim().toLowerCase().replace(/\s+/g,'');
+  if(!str) return null;
+  const m = str.match(/^(\d{1,2}):?(\d{2})?(am|pm|a|p)?$/);
+  if(!m) return null;
+  let hour = parseInt(m[1],10);
+  let min = m[2] ? parseInt(m[2],10) : 0;
+  const ampm = m[3] ? m[3][0] : null;
+  if(ampm){
+    if(hour<1 || hour>12) return null;
+    if(hour===12) hour = 0;
+    if(ampm==='p') hour += 12;
+  }
+  if(hour>23 || hour<0 || min>59 || min<0) return null;
+  return String(hour).padStart(2,'0')+':'+String(min).padStart(2,'0');
+}
+function formatTimeForDisplay(hhmm){
+  if(!hhmm) return '';
+  const [h,m] = hhmm.split(':').map(Number);
+  const ampm = h<12 ? 'AM' : 'PM';
+  let hr = h%12; if(hr===0) hr=12;
+  return hr+':'+String(m).padStart(2,'0')+' '+ampm;
+}
+function normalizeTimeField(elId){
+  const el = document.getElementById(elId);
+  if(!el) return;
+  const val = el.value.trim();
+  if(!val) return;
+  const parsed = parseTimeString(val);
+  if(parsed) el.value = formatTimeForDisplay(parsed);
+}
 function openBlockModal(dayId, blockId, prefillStartHour, prefillEndHour){
   const day = data.days.find(d=>d.id===dayId);
   const existing = blockId ? day.activities.find(a=>a.id===blockId) : null;
   const hasPlace = existing && existing.placeId;
-  const startVal = existing ? (existing.startTime||'') : (prefillStartHour!=null ? String(prefillStartHour).padStart(2,'0')+':00' : '');
-  const endVal = existing ? (existing.endTime||'') : (prefillEndHour!=null ? String(prefillEndHour).padStart(2,'0')+':00' : '');
+  const startVal = existing ? formatTimeForDisplay(existing.startTime) : (prefillStartHour!=null ? formatTimeForDisplay(String(prefillStartHour).padStart(2,'0')+':00') : '');
+  const endVal = existing ? formatTimeForDisplay(existing.endTime) : (prefillEndHour!=null ? formatTimeForDisplay(String(prefillEndHour).padStart(2,'0')+':00') : '');
   const html = `
     <div class="modal-head"><h2>${existing?'Edit block':'Add block'}</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="row">
-      <div><label>Start time</label><input type="time" id="m-bstart" value="${startVal}"></div>
-      <div><label>End time</label><input type="time" id="m-bend" value="${endVal}"></div>
+      <div><label>Start time</label><input type="text" id="m-bstart" placeholder="e.g. 11am" value="${startVal}" onblur="normalizeTimeField('m-bstart')"></div>
+      <div><label>End time</label><input type="text" id="m-bend" placeholder="e.g. 1:30pm" value="${endVal}" onblur="normalizeTimeField('m-bend')"></div>
     </div>
-    <small class="hint">Leave both blank to keep this unscheduled — it'll show above the calendar instead of on it.</small>
+    <small class="hint">Type times like "11am", "1:30pm", or "13:30" — leave both blank to keep this unscheduled.</small>
     <label style="margin-top:12px;">Pull from Places (optional)</label>
-    <input type="text" id="m-bplacefilter" placeholder="Filter places…" oninput="refreshBlockPlaceOptions()" style="margin-bottom:6px;">
+    <input type="text" id="m-bplacefilter" placeholder="Filter — try beach; hike" oninput="refreshBlockPlaceOptions()" style="margin-bottom:6px;">
     <div class="row" style="margin-bottom:6px;">
       <button type="button" class="btn btn-ghost btn-sm" id="sortByNameBtn" onclick="setBlockPlaceSort('name')">Sort: Name</button>
       <button type="button" class="btn btn-ghost btn-sm" id="sortByAreaBtn" onclick="setBlockPlaceSort('area')">Sort: Area</button>
@@ -1644,11 +1768,22 @@ function updateBlockTextLabel(){
 }
 function saveBlock(dayId, blockId){
   const day = data.days.find(d=>d.id===dayId);
+  const startRaw = document.getElementById('m-bstart').value.trim();
+  const endRaw = document.getElementById('m-bend').value.trim();
+  let startTime = '', endTime = '';
+  if(startRaw){
+    startTime = parseTimeString(startRaw);
+    if(!startTime){ toast('Couldn\'t understand that start time — try "11am" or "13:30"'); return; }
+  }
+  if(endRaw){
+    endTime = parseTimeString(endRaw);
+    if(!endTime){ toast('Couldn\'t understand that end time — try "1:30pm" or "13:30"'); return; }
+  }
   const placeId = document.getElementById('m-bplace').value || null;
   const obj = {
     id: blockId || cid(),
-    startTime: document.getElementById('m-bstart').value,
-    endTime: document.getElementById('m-bend').value,
+    startTime,
+    endTime,
     placeId,
     text: document.getElementById('m-btext').value.trim()
   };
@@ -1821,18 +1956,23 @@ function resetPlaceFilters(){
   document.getElementById('pf-search').value = '';
   renderPlaces();
 }
+function matchesAnyTerm(haystack, filterRaw){
+  const terms = filterRaw.split(';').map(t=>t.trim().toLowerCase()).filter(Boolean);
+  if(!terms.length) return true;
+  return terms.some(t => haystack.includes(t));
+}
 function getFilteredSortedPlaces(){
   const mustdo = document.getElementById('pf-mustdo').value;
   const type = document.getElementById('pf-type').value;
-  const area = document.getElementById('pf-area').value.trim().toLowerCase();
-  const search = document.getElementById('pf-search').value.trim().toLowerCase();
+  const area = document.getElementById('pf-area').value.trim();
+  const search = document.getElementById('pf-search').value.trim();
   const rows = data.places.filter(p=>{
     if(mustdo && p.mustDo!==mustdo) return false;
     if(type && p.type!==type) return false;
-    if(area && !(p.area||'').toLowerCase().includes(area)) return false;
+    if(area && !matchesAnyTerm((p.area||'').toLowerCase(), area)) return false;
     if(search){
       const hay = [p.name,p.subtype,p.type,p.area,p.location,p.tasks,p.notes].join(' ').toLowerCase();
-      if(!hay.includes(search)) return false;
+      if(!matchesAnyTerm(hay, search)) return false;
     }
     return true;
   });
@@ -2011,6 +2151,7 @@ function openPlaceModal(id){
     <div class="modal-head"><h2>${existing?'Edit place':'Add place'}</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <label>Name</label>
     <input type="text" id="m-pname" placeholder="e.g. Hanalei Bay" value="${existing?escapeHtml(existing.name):''}">
+    ${existing?`<button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openAddToDayPicker('${existing.id}')">📅 Add to Day</button>`:''}
     <label>Must do?</label>
     <select id="m-pmustdo">
       <option value="Yes" ${existing&&existing.mustDo==='Yes'?'selected':''}>Yes</option>
@@ -2055,7 +2196,29 @@ function openPlaceModal(id){
   populateTypeSelect(document.getElementById('m-ptype'), existing?existing.type:(data.placeTypes[0]||''));
   populateAreaSelect(document.getElementById('m-parea'), existing?existing.area:'');
   const nameField = document.getElementById('m-pname');
-  setTimeout(()=>{ nameField.focus(); nameField.select(); }, 30);
+  setTimeout(()=>{ if(document.body.contains(nameField)){ nameField.focus(); nameField.select(); } }, 30);
+}
+function openAddToDayPicker(placeId){
+  const days = sortedDays();
+  if(!days.length){ toast('Set trip dates or add a day first'); return; }
+  const options = days.map((d,idx)=>`<option value="${d.id}">${escapeHtml(dayLabel(d, idx))}</option>`).join('');
+  const html = `
+    <div class="modal-head"><h2>Add to a day</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <label>Day</label>
+    <select id="m-addtodayselect">${options}</select>
+    <small class="hint">Adds this place as an unscheduled block — set a time for it anytime from the Days tab.</small>
+    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="confirmAddToDay('${placeId}')">Add</button>
+  `;
+  showModal(html);
+}
+function confirmAddToDay(placeId){
+  const dayId = document.getElementById('m-addtodayselect').value;
+  const day = data.days.find(d=>d.id===dayId);
+  if(!day) return;
+  day.activities.push({id:cid(), startTime:'', endTime:'', placeId, text:''});
+  persist();
+  closeModal();
+  toast('Added — set a time for it in the Days tab');
 }
 function placeMapUrl(p){
   if(p.mapsUrl) return p.mapsUrl;
