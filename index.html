@@ -431,6 +431,7 @@ function loadData(){
       const parsed = JSON.parse(raw);
       if(!parsed.places) parsed.places = [];
       if(!parsed.placeTypes) parsed.placeTypes = ['Restaurant','Activity','Hike','Beach','Lodging','Shopping','Sight','Other'];
+      if(!parsed.placeAreas) parsed.placeAreas = [...new Set((parsed.places||[]).map(p=>p.area).filter(Boolean))];
       if(!parsed.sync) parsed.sync = {url:'', key:'', code:''};
       (parsed.days||[]).forEach(day=>{
         (day.activities||[]).forEach(b=>{
@@ -458,6 +459,7 @@ function loadData(){
     contacts:[],
     places:[],
     placeTypes:['Restaurant','Activity','Hike','Beach','Lodging','Shopping','Sight','Other'],
+    placeAreas:[],
     sync:{
       url:'https://ffmecrrdxqiggkmlckgn.supabase.co',
       key:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZmbWVjcnJkeHFpZ2drbWxja2duIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI5Mzg4MzcsImV4cCI6MjA5ODUxNDgzN30.Zxl0w91KONsRaxI2n6FYHFelVsoHMvKRT0JINGczK_M',
@@ -1085,6 +1087,24 @@ function confirmNewType(){
   document.getElementById('m-ptype-new-wrap').style.display='none';
   populateFilterTypeOptions();
 }
+function populateAreaSelect(selectEl, selectedVal){
+  selectEl.innerHTML = '<option value="">— No area —</option>'
+    + data.placeAreas.map(a=>`<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('')
+    + `<option value="__new__">+ Add new area…</option>`;
+  selectEl.value = (selectedVal && data.placeAreas.includes(selectedVal)) ? selectedVal : '';
+}
+function handleAreaSelectChange(){
+  const sel = document.getElementById('m-parea');
+  document.getElementById('m-parea-new-wrap').style.display = sel.value==='__new__' ? 'block' : 'none';
+}
+function confirmNewArea(){
+  const val = document.getElementById('m-parea-new').value.trim();
+  if(!val) return;
+  if(!data.placeAreas.includes(val)) data.placeAreas.push(val);
+  persist();
+  populateAreaSelect(document.getElementById('m-parea'), val);
+  document.getElementById('m-parea-new-wrap').style.display='none';
+}
 function openPlaceModal(id){
   const existing = id ? data.places.find(p=>p.id===id) : null;
   const html = `
@@ -1097,21 +1117,31 @@ function openPlaceModal(id){
       <option value="Maybe" ${!existing||existing.mustDo==='Maybe'?'selected':''}>Maybe</option>
       <option value="Meh" ${existing&&existing.mustDo==='Meh'?'selected':''}>Meh</option>
     </select>
-    <label>Type</label>
-    <select id="m-ptype" onchange="handleTypeSelectChange()"></select>
+    <div class="row">
+      <div>
+        <label>Type</label>
+        <select id="m-ptype" onchange="handleTypeSelectChange()"></select>
+      </div>
+      <div>
+        <label>Subtype</label>
+        <input type="text" id="m-psubtype" placeholder="Free text" value="${existing?escapeHtml(existing.subtype||''):''}">
+      </div>
+    </div>
     <div id="m-ptype-new-wrap" style="display:none; margin-top:8px;">
       <input type="text" id="m-ptype-new" placeholder="New type name">
       <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="confirmNewType()">Save new type</button>
     </div>
-    <label>Subtype</label>
-    <input type="text" id="m-psubtype" placeholder="Free text" value="${existing?escapeHtml(existing.subtype||''):''}">
     <label>Area</label>
-    <input type="text" id="m-parea" placeholder="e.g. North Shore" value="${existing?escapeHtml(existing.area||''):''}">
+    <select id="m-parea" onchange="handleAreaSelectChange()"></select>
+    <div id="m-parea-new-wrap" style="display:none; margin-top:8px;">
+      <input type="text" id="m-parea-new" placeholder="New area name">
+      <button class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="confirmNewArea()">Save new area</button>
+    </div>
     <label>Specific location</label>
     <input type="text" id="m-plocation" placeholder="Address, trailhead, landmark…" value="${existing?escapeHtml(existing.location||''):''}">
     <label>Google Maps link (optional)</label>
     <input type="text" id="m-pmapsurl" placeholder="Paste a Google Maps share link — or leave blank to auto-search" value="${existing?escapeHtml(existing.mapsUrl||''):''}">
-    <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="openPlaceOnMap('${existing?existing.id:''}')">🗺 Open in Google Maps</button>
+    <small class="hint">A map icon 🗺 shows up next to this place in the Places list once saved.</small>
     <label>Tasks</label>
     <textarea id="m-ptasks" placeholder="e.g. Book permit, reserve parking">${existing?escapeHtml(existing.tasks||''):''}</textarea>
     <label>Notes</label>
@@ -1123,38 +1153,27 @@ function openPlaceModal(id){
   `;
   showModal(html);
   populateTypeSelect(document.getElementById('m-ptype'), existing?existing.type:(data.placeTypes[0]||''));
+  populateAreaSelect(document.getElementById('m-parea'), existing?existing.area:'');
+  const nameField = document.getElementById('m-pname');
+  setTimeout(()=>{ nameField.focus(); nameField.select(); }, 30);
 }
 function placeMapUrl(p){
   if(p.mapsUrl) return p.mapsUrl;
   const q = [p.name, p.location, p.area].filter(Boolean).join(', ');
   return 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(q);
 }
-function openPlaceOnMap(id){
-  // Uses whatever is currently typed in the modal fields, even before saving.
-  const nameEl = document.getElementById('m-pname');
-  const locEl = document.getElementById('m-plocation');
-  const areaEl = document.getElementById('m-parea');
-  const urlEl = document.getElementById('m-pmapsurl');
-  const draft = {
-    name: nameEl?nameEl.value.trim():'',
-    location: locEl?locEl.value.trim():'',
-    area: areaEl?areaEl.value.trim():'',
-    mapsUrl: urlEl?urlEl.value.trim():''
-  };
-  if(!draft.name && !draft.location && !draft.area && !draft.mapsUrl){
-    toast('Add a name, area, or location first'); return;
-  }
-  window.open(placeMapUrl(draft), '_blank', 'noopener');
-}
 function savePlace(id){
   const typeSel = document.getElementById('m-ptype').value;
+  const areaSel = document.getElementById('m-parea').value;
+  const area = areaSel==='__new__' ? '' : areaSel;
+  if(area && !data.placeAreas.includes(area)) data.placeAreas.push(area);
   const obj = {
     id: id || cid(),
     name: document.getElementById('m-pname').value.trim() || 'Untitled place',
     mustDo: document.getElementById('m-pmustdo').value,
     type: typeSel==='__new__' ? '' : typeSel,
     subtype: document.getElementById('m-psubtype').value.trim(),
-    area: document.getElementById('m-parea').value.trim(),
+    area,
     location: document.getElementById('m-plocation').value.trim(),
     mapsUrl: document.getElementById('m-pmapsurl').value.trim(),
     tasks: document.getElementById('m-ptasks').value.trim(),
