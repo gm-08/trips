@@ -2438,7 +2438,10 @@ function renderPlaces(){
   }
   tbody.innerHTML = rows.map(p=>`
     <tr onclick="openPlaceModal('${p.id}')">
-      <td>${escapeHtml(p.name)} ${(data.trip.destinations&&data.trip.destinations.length)?`<a href="#" onclick="event.stopPropagation(); event.preventDefault(); openQuickAssignDestination('${p.id}')" title="Assign destination" style="text-decoration:none;">🏷</a>`:''}</td>
+      <td>${escapeHtml(p.name)} ${isPlaceScheduled(p.id)
+        ? `<a href="#" onclick="event.stopPropagation(); event.preventDefault(); openScheduledForPlaceModal('${p.id}')" title="Already scheduled — tap to view or add another" style="text-decoration:none;">✅</a>`
+        : `<a href="#" onclick="event.stopPropagation(); event.preventDefault(); openAddToDayPicker('${p.id}')" title="Add to Day" style="text-decoration:none;">➕</a>`
+      }</td>
       <td>${p.mustDo?`<span class="mustdo-pill mustdo-${p.mustDo.toLowerCase()}">${escapeHtml(p.mustDo)}</span>`:''}</td>
       <td>${escapeHtml(p.type||'')}</td>
       <td>${escapeHtml(p.subtype||'')}</td>
@@ -2668,7 +2671,6 @@ function openPlaceModal(id){
     <div class="modal-head"><h2>${existing?'Edit place':'Add place'}</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <label>Name</label>
     <input type="text" id="m-pname" placeholder="e.g. Hanalei Bay" value="${existing?escapeHtml(existing.name):''}">
-    ${existing?`<button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openAddToDayPicker('${existing.id}')">📅 Add to Day</button>`:''}
     <label>Must do?</label>
     <select id="m-pmustdo">
       <option value="Yes" ${existing&&existing.mustDo==='Yes'?'selected':''}>Yes</option>
@@ -2718,6 +2720,46 @@ function openPlaceModal(id){
   populateAreaSelect(document.getElementById('m-parea'), existing?existing.area:'');
   const nameField = document.getElementById('m-pname');
   setTimeout(()=>{ if(document.body.contains(nameField)){ nameField.focus(); nameField.select(); } }, 30);
+}
+function isPlaceScheduled(placeId){
+  return data.days.some(day => (day.activities||[]).some(a=>a.placeId===placeId));
+}
+function findDayBlocksForPlace(placeId){
+  const results = [];
+  data.days.forEach(day=>{
+    (day.activities||[]).forEach(a=>{
+      if(a.placeId===placeId) results.push({day, block:a});
+    });
+  });
+  return results;
+}
+function openScheduledForPlaceModal(placeId){
+  const p = data.places.find(x=>x.id===placeId);
+  if(!p) return;
+  const matches = findDayBlocksForPlace(placeId);
+  const days = sortedDays();
+  const rowsHtml = matches.map(({day,block})=>{
+    const idx = days.indexOf(day);
+    const timeLabel = block.startTime ? formatTimeForDisplay(block.startTime) : 'Unscheduled';
+    return `<div class="day-list-row" onclick="jumpToScheduledBlock('${day.id}','${block.id}')">
+      <div class="day-list-date">${escapeHtml(dayLabel(day, idx))}</div>
+      <div class="day-list-title">${escapeHtml(timeLabel)}</div>
+    </div>`;
+  }).join('');
+  const html = `
+    <div class="modal-head"><h2>${escapeHtml(p.name)}</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <p style="font-size:13px; color:var(--ink-soft); margin-top:0;">Already scheduled on:</p>
+    <div class="day-list">${rowsHtml}</div>
+    <button class="btn btn-ghost btn-block" style="margin-top:14px" onclick="openAddToDayPicker('${placeId}')">+ Add to another day</button>
+  `;
+  showModal(html);
+}
+function jumpToScheduledBlock(dayId, blockId){
+  closeModal();
+  activeDayId = dayId;
+  switchTab('days');
+  renderDayNav(); renderCalendar(); renderDayNotes();
+  setTimeout(()=> openBlockModal(dayId, blockId), 50);
 }
 function openAddToDayPicker(placeId){
   const days = sortedDays();
