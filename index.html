@@ -1082,7 +1082,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <select id="pf-destination" onchange="renderPlaces()" style="font-weight:700;">
           <option value="">All destinations</option>
         </select>
-        <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="openBulkAssignDestinationModal()">🏷 Assign shown places to a destination</button>
         <div class="row">
           <select id="pf-mustdo" onchange="renderPlaces()">
             <option value="">Must do: All</option>
@@ -1367,9 +1366,12 @@ function fmtDate(iso){
 function renderDestList(destinations){
   if(!destinations || !destinations.length) return '<div style="font-size:12.5px;color:var(--ink-soft);padding:4px 0;">No destinations added yet — Days grouping and the Places switcher will appear once you add some.</div>';
   return destinations.map(d=>`
-    <div class="dest-row">
-      <div class="dest-row-name">${escapeHtml(d.name)}</div>
-      <button type="button" class="del" onclick="removeDestination('${d.id}')" aria-label="Remove">&times;</button>
+    <div class="dest-row" onclick="openEditDestinationModal('${d.id}')">
+      <div>
+        <div class="dest-row-name">${escapeHtml(d.name)}</div>
+        ${(d.start&&d.end)?`<div class="dest-row-dates">${fmtDate(d.start)} – ${fmtDate(d.end)}</div>`:''}
+      </div>
+      <button type="button" class="del" onclick="event.stopPropagation(); removeDestination('${d.id}')" aria-label="Remove">&times;</button>
     </div>
   `).join('');
 }
@@ -1391,11 +1393,64 @@ function addDestination(){
   refreshDestinationUI();
 }
 function removeDestination(id){
+  if(!confirm('Remove this destination? Places and days tagged with it will become unassigned.')) return;
   snapshotForUndo();
   data.trip.destinations = data.trip.destinations.filter(d=>d.id!==id);
   data.trip.destination = data.trip.destinations.map(d=>d.name).join(', ');
+  data.places.forEach(p=>{ if(p.destinationId===id) p.destinationId = null; });
+  data.days.forEach(d=>{ if(d.destinationId===id) d.destinationId = null; });
   persist();
   refreshDestinationUI();
+}
+function openEditDestinationModal(id){
+  const dest = (data.trip.destinations||[]).find(d=>d.id===id);
+  if(!dest) return;
+  const html = `
+    <div class="modal-head"><h2>Edit destination</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <label>Name</label>
+    <input type="text" id="m-destedit-name" value="${escapeHtml(dest.name)}">
+    <label>Assign days in a date range (optional)</label>
+    <div class="row">
+      <div><label>Start date</label><input type="date" id="m-destedit-start" value="${dest.start||''}"></div>
+      <div><label>End date</label><input type="date" id="m-destedit-end" value="${dest.end||''}"></div>
+    </div>
+    <small class="hint">Saving with both dates filled in tags every day in that range as ${escapeHtml(dest.name)} — quicker than assigning each day one by one. You can still adjust individual days afterward.</small>
+    <div class="row" style="margin-top:14px;">
+      <button class="btn btn-danger" onclick="deleteDestinationFromEditModal('${dest.id}')">Delete</button>
+      <button class="btn btn-primary" onclick="saveDestinationEdit('${dest.id}')">Save</button>
+    </div>
+  `;
+  showModal(html);
+}
+function saveDestinationEdit(id){
+  const dest = (data.trip.destinations||[]).find(d=>d.id===id);
+  if(!dest) return;
+  snapshotForUndo();
+  dest.name = document.getElementById('m-destedit-name').value.trim() || dest.name;
+  const start = document.getElementById('m-destedit-start').value;
+  const end = document.getElementById('m-destedit-end').value;
+  dest.start = start; dest.end = end;
+  let assignedCount = 0;
+  if(start && end){
+    data.days.forEach(day=>{
+      if(day.date && day.date>=start && day.date<=end){
+        day.destinationId = dest.id;
+        assignedCount++;
+      }
+    });
+  }
+  data.trip.destination = data.trip.destinations.map(d=>d.name).join(', ');
+  persist();
+  closeModal();
+  openTripSettingsModal();
+  toast(assignedCount ? `Saved — ${assignedCount} day${assignedCount===1?'':'s'} assigned` : 'Destination saved');
+}
+function deleteDestinationFromEditModal(id){
+  removeDestination(id);
+  if(!data.trip.destinations.find(d=>d.id===id)){
+    closeModal();
+    openTripSettingsModal();
+  }
 }
 function openTripSettingsModal(){
   const t = data.trip, s = data.sync;
@@ -1950,8 +2005,12 @@ function confirmSwapDay(){
   persist(); renderDays(); closeModal(); toast('Days swapped');
 }
 
+let blockModalDestinationId = null;
 function buildPlaceOptions(selectedId, filterText){
   let list = data.places.slice();
+  if(blockModalDestinationId){
+    list = list.filter(p => p.destinationId===blockModalDestinationId || p.id===selectedId);
+  }
   if(filterText){
     list = list.filter(p => matchesAnyTerm([p.name,p.area,p.type,p.subtype,p.location].filter(Boolean).join(' ').toLowerCase(), filterText));
   }
@@ -2019,6 +2078,8 @@ function openBlockModal(dayId, blockId, prefillStartHour, prefillEndHour){
   const day = data.days.find(d=>d.id===dayId);
   const existing = blockId ? day.activities.find(a=>a.id===blockId) : null;
   const hasPlace = existing && existing.placeId;
+  blockModalDestinationId = day.destinationId || null;
+  const destLabel = blockModalDestinationId ? (data.trip.destinations||[]).find(d=>d.id===blockModalDestinationId) : null;
   const startVal = existing ? formatTimeForDisplay(existing.startTime) : (prefillStartHour!=null ? formatTimeForDisplay(String(prefillStartHour).padStart(2,'0')+':00') : '');
   const endVal = existing ? formatTimeForDisplay(existing.endTime) : (prefillEndHour!=null ? formatTimeForDisplay(String(prefillEndHour).padStart(2,'0')+':00') : '');
   const html = `
@@ -2029,6 +2090,7 @@ function openBlockModal(dayId, blockId, prefillStartHour, prefillEndHour){
     </div>
     <small class="hint">Type times like "11am", "1:30pm", or "13:30" — leave both blank to keep this unscheduled.</small>
     <label style="margin-top:12px;">Pull from Places (optional)</label>
+    ${destLabel?`<small class="hint">Showing places in ${escapeHtml(destLabel.name)} only.</small>`:''}
     <input type="text" id="m-bplacefilter" placeholder="Filter — try beach; hike" oninput="refreshBlockPlaceOptions()" style="margin-bottom:6px;">
     <div class="row" style="margin-bottom:6px;">
       <button type="button" class="btn btn-ghost btn-sm" id="sortByNameBtn" onclick="setBlockPlaceSort('name')">Sort: Name</button>
@@ -2262,57 +2324,46 @@ function populateFilterTypeOptions(){
   sel.innerHTML = `<option value="">Type: All</option>` + data.placeTypes.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
   sel.value = data.placeTypes.includes(current) ? current : '';
 }
-function openBulkAssignDestinationModal(){
-  const rows = getFilteredSortedPlaces();
-  if(!rows.length){ toast('No places currently shown to assign'); return; }
+function getActivePlacesDestination(){
+  const sel = document.getElementById('pf-destination');
+  if(!sel) return null;
+  const val = sel.value;
+  if(!val || val==='__unassigned__') return null;
+  return val;
+}
+function openQuickAssignDestination(placeId){
+  const p = data.places.find(x=>x.id===placeId);
+  if(!p) return;
   const html = `
-    <div class="modal-head"><h2>Assign to a destination</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
-    <p style="font-size:13px; color:var(--ink-soft); margin-top:0;">Tags all <b>${rows.length}</b> place${rows.length===1?'':'s'} currently shown in the list as one destination — handy for a list you built before destinations existed, or for splitting off part of your list.</p>
-    <label>Destination</label>
-    <select id="m-bulkdest">
-      <option value="">— Select —</option>
-      ${(data.trip.destinations||[]).map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('')}
+    <div class="modal-head"><h2>Assign destination</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div style="font-weight:700; font-size:14px; margin-bottom:8px;">${escapeHtml(p.name)}</div>
+    <select id="m-quickdest">
+      <option value="">— Unassigned —</option>
+      ${(data.trip.destinations||[]).map(d=>`<option value="${d.id}" ${p.destinationId===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}
     </select>
-    <label>Or create a new one</label>
-    <input type="text" id="m-bulkdest-new" placeholder="e.g. Kauai">
-    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="confirmBulkAssignDestination()">Assign ${rows.length} place${rows.length===1?'':'s'}</button>
+    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="saveQuickAssignDestination('${placeId}')">Save</button>
   `;
   showModal(html);
 }
-function confirmBulkAssignDestination(){
-  const rows = getFilteredSortedPlaces();
-  const newName = document.getElementById('m-bulkdest-new').value.trim();
-  let destId = document.getElementById('m-bulkdest').value;
-  if(newName){
-    const existingMatch = (data.trip.destinations||[]).find(d=>d.name.toLowerCase()===newName.toLowerCase());
-    if(existingMatch) destId = existingMatch.id;
-  }
-  if(!destId && !newName){ toast('Pick or create a destination first'); return; }
+function saveQuickAssignDestination(placeId){
   snapshotForUndo();
-  if(newName && !destId){
-    if(!data.trip.destinations) data.trip.destinations = [];
-    const newDest = {id:cid(), name:newName};
-    data.trip.destinations.push(newDest);
-    data.trip.destination = data.trip.destinations.map(d=>d.name).join(', ');
-    destId = newDest.id;
-  }
-  const idSet = new Set(rows.map(r=>r.id));
-  data.places.forEach(p=>{ if(idSet.has(p.id)) p.destinationId = destId; });
+  const idx = data.places.findIndex(p=>p.id===placeId);
+  if(idx>-1) data.places[idx].destinationId = document.getElementById('m-quickdest').value || null;
   persist();
   populateDestinationFilterOptions();
-  const destSel = document.getElementById('pf-destination');
-  if(destSel) destSel.value = destId;
   renderPlaces();
   closeModal();
-  toast(`Assigned ${rows.length} place${rows.length===1?'':'s'}`);
+  toast('Destination updated');
 }
 function populateDestinationFilterOptions(){
   const sel = document.getElementById('pf-destination');
   if(!sel) return;
   const current = sel.value;
   const dests = data.trip.destinations || [];
-  sel.innerHTML = '<option value="">All destinations</option>' + dests.map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
-  sel.value = dests.find(d=>d.id===current) ? current : '';
+  let options = '<option value="">All destinations</option>' + dests.map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+  if(dests.length) options += `<option value="__unassigned__">Unassigned</option>`;
+  sel.innerHTML = options;
+  sel.value = (current==='__unassigned__' || dests.find(d=>d.id===current)) ? current : '';
 }
 function resetPlaceFilters(){
   document.getElementById('pf-mustdo').value = '';
@@ -2336,7 +2387,8 @@ function getFilteredSortedPlaces(){
   const rows = data.places.filter(p=>{
     if(mustdo && p.mustDo!==mustdo) return false;
     if(type && p.type!==type) return false;
-    if(destination && p.destinationId!==destination) return false;
+    if(destination==='__unassigned__' && p.destinationId) return false;
+    if(destination && destination!=='__unassigned__' && p.destinationId!==destination) return false;
     if(area && !matchesAnyTerm((p.area||'').toLowerCase(), area)) return false;
     if(search){
       const hay = [p.name,p.subtype,p.type,p.area,p.location,p.tasks,p.notes].join(' ').toLowerCase();
@@ -2371,7 +2423,7 @@ function renderPlaces(){
   }
   tbody.innerHTML = rows.map(p=>`
     <tr onclick="openPlaceModal('${p.id}')">
-      <td>${escapeHtml(p.name)}</td>
+      <td>${escapeHtml(p.name)} ${(data.trip.destinations&&data.trip.destinations.length)?`<a href="#" onclick="event.stopPropagation(); event.preventDefault(); openQuickAssignDestination('${p.id}')" title="Assign destination" style="text-decoration:none;">🏷</a>`:''}</td>
       <td>${p.mustDo?`<span class="mustdo-pill mustdo-${p.mustDo.toLowerCase()}">${escapeHtml(p.mustDo)}</span>`:''}</td>
       <td>${escapeHtml(p.type||'')}</td>
       <td>${escapeHtml(p.subtype||'')}</td>
@@ -2601,16 +2653,6 @@ function openPlaceModal(id){
       <option value="Maybe" ${!existing||existing.mustDo==='Maybe'?'selected':''}>Maybe</option>
       <option value="Meh" ${existing&&existing.mustDo==='Meh'?'selected':''}>Meh</option>
     </select>
-    ${(data.trip.destinations&&data.trip.destinations.length)?`
-    <label>Destination</label>
-    <select id="m-pdestination">
-      <option value="">— Not set —</option>
-      ${data.trip.destinations.map(d=>{
-        const currentDestFilter = document.getElementById('pf-destination') ? document.getElementById('pf-destination').value : '';
-        const selectedId = existing ? existing.destinationId : currentDestFilter;
-        return `<option value="${d.id}" ${selectedId===d.id?'selected':''}>${escapeHtml(d.name)}</option>`;
-      }).join('')}
-    </select>`:''}
     <div class="row">
       <div>
         <label>Type</label>
@@ -2690,12 +2732,11 @@ function savePlace(id){
   if(area && !data.placeAreas.includes(area)) data.placeAreas.push(area);
   const existingPlace = id ? data.places.find(p=>p.id===id) : null;
   const oldTasks = existingPlace ? existingPlace.tasks || '' : null;
-  const destSel = document.getElementById('m-pdestination');
   const obj = {
     id: id || cid(),
     name: document.getElementById('m-pname').value.trim() || 'Untitled place',
     mustDo: document.getElementById('m-pmustdo').value,
-    destinationId: destSel ? (destSel.value || null) : (existingPlace ? existingPlace.destinationId||null : null),
+    destinationId: existingPlace ? (existingPlace.destinationId||null) : getActivePlacesDestination(),
     type: typeSel==='__new__' ? '' : typeSel,
     subtype: document.getElementById('m-psubtype').value.trim(),
     area,
