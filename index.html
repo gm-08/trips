@@ -194,6 +194,8 @@
   .activity-time{font-size:12px; font-weight:700; color:var(--rust);}
   .activity-title{font-size:15px; font-weight:700; margin:2px 0 2px;}
   .activity-detail{font-size:13px; color:var(--ink-soft); margin:1px 0;}
+  .place-detail-line{display:flex; flex-wrap:wrap; align-items:center; gap:5px; row-gap:2px;}
+  .place-detail-dot{opacity:0.4;}
   .activity-detail a{color:var(--teal); text-decoration:none; font-weight:600;}
   .activity-actions{display:flex; gap:6px; margin-top:8px;}
   .tag-backup{
@@ -287,6 +289,12 @@
   .filter-card .row + .row{margin-top:8px;}
   .filter-card select, .filter-card input{font-size:13px;}
   .sync-status{font-size:12px; color:var(--ink-soft); margin-top:8px;}
+  .chip-list{display:flex; flex-wrap:wrap; gap:6px; margin:6px 0;}
+  .chip{
+    display:inline-flex; align-items:center; gap:4px; background:#FBF3E1; border:1px solid var(--line);
+    border-radius:14px; padding:4px 6px 4px 10px; font-size:12.5px; font-weight:600; color:var(--ink);
+  }
+  .chip button{background:none; border:none; color:var(--ink-soft); font-size:14px; cursor:pointer; padding:0 4px; line-height:1;}
   .sync-status.ok{color:var(--teal); font-weight:700;}
 
   @media print{
@@ -1018,7 +1026,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button class="day-nav-btn" id="dayNavNext" onclick="navigateDay(1)" aria-label="Next day">›</button>
         <button class="day-nav-jump" onclick="openDayListModal()" aria-label="All days">📅</button>
       </div>
-      <small class="hint" id="calendarHint" style="display:block; margin:8px 0;">Tap an hour for a quick block. Drag a block to reschedule it — press and hold empty space for 3 seconds, then drag.</small>
+      <div class="row no-print" style="margin-top:8px;">
+        <button class="btn btn-ghost btn-sm" id="swapDayBtn" onclick="openSwapDayModal()">⇄ Swap plans</button>
+        <button class="btn btn-danger btn-sm" id="deleteDayBtn" onclick="deleteActiveDay()">Delete this day</button>
+      </div>
+      <small class="hint" id="calendarHint" style="display:block; margin:8px 0;">Tap an hour for a quick block. Drag a block to reschedule it — press and hold empty space for 1 second, then drag.</small>
       <div class="calendar-wrap">
         <div class="calendar-grid" id="calendarGrid"></div>
       </div>
@@ -1030,10 +1042,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
       <div class="card">
         <textarea id="f-daynotes" placeholder="Anything specific to this day…" style="min-height:100px;"></textarea>
         <button class="btn btn-ghost btn-block" style="margin-top:10px" onclick="saveDayNotes()">Save notes</button>
-      </div>
-      <div class="row no-print" style="margin-top:12px;">
-        <button class="btn btn-ghost btn-sm" id="swapDayBtn" onclick="openSwapDayModal()">⇄ Swap plans</button>
-        <button class="btn btn-danger btn-sm" id="deleteDayBtn" onclick="deleteActiveDay()">Delete this day</button>
       </div>
     </section>
 
@@ -1098,7 +1106,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <div id="placesMapStatus" style="padding:10px 14px; font-size:12.5px; color:var(--ink-soft);"></div>
           <div id="placesMapEl" style="width:100%; height:400px;"></div>
         </div>
-        <small class="hint">Pins come from a free lookup (OpenStreetMap Nominatim) based on each place's name, location, and area — it needs internet the first time and caches after that. Some places may not be found if the text is too vague.</small>
+        <small class="hint">Most reliable: paste a Google Maps link on each place (in its edit screen) and tap "Grab coordinates" — works instantly, no internet needed at that moment. Places without a link fall back to a free automatic lookup, which needs internet and can miss vague locations.</small>
       </div>
     </section>
 
@@ -1206,6 +1214,9 @@ function loadData(){
       if(!parsed.typeColors) parsed.typeColors = {};
       if(!parsed.sync) parsed.sync = {url:'', key:'', code:''};
       if(parsed.checklistNotes===undefined) parsed.checklistNotes = '';
+      if(parsed.trip && !Array.isArray(parsed.trip.destinations)){
+        parsed.trip.destinations = parsed.trip.destination ? [parsed.trip.destination] : [];
+      }
       (parsed.days||[]).forEach(day=>{
         (day.activities||[]).forEach(b=>{
           if(b.time && !b.startTime){
@@ -1220,7 +1231,7 @@ function loadData(){
     }
   }catch(e){}
   return {
-    trip:{name:'My Trip', destination:'', start:'', end:'', notes:''},
+    trip:{name:'My Trip', destination:'', destinations:[], start:'', end:'', notes:''},
     days:[],
     checklist:[
       {id:cid(), text:'Download offline maps for every area you\'ll visit', done:false},
@@ -1333,14 +1344,43 @@ function fmtDate(iso){
   const d = new Date(iso+'T00:00:00');
   return (d.getMonth()+1)+'/'+d.getDate();
 }
+function renderDestChips(destinations){
+  if(!destinations || !destinations.length) return '<div style="font-size:12.5px;color:var(--ink-soft);padding:4px 0;">No destinations added yet</div>';
+  return destinations.map((d,i)=>`<span class="chip">${escapeHtml(d)} <button type="button" onclick="removeDestination(${i})" aria-label="Remove">&times;</button></span>`).join('');
+}
+function addDestination(){
+  const input = document.getElementById('m-destnew');
+  const val = input.value.trim();
+  if(!val) return;
+  snapshotForUndo();
+  if(!data.trip.destinations) data.trip.destinations = [];
+  data.trip.destinations.push(val);
+  data.trip.destination = data.trip.destinations.join(', ');
+  persist();
+  input.value = '';
+  document.getElementById('destChipList').innerHTML = renderDestChips(data.trip.destinations);
+  renderHeader();
+}
+function removeDestination(idx){
+  snapshotForUndo();
+  data.trip.destinations.splice(idx,1);
+  data.trip.destination = data.trip.destinations.join(', ');
+  persist();
+  document.getElementById('destChipList').innerHTML = renderDestChips(data.trip.destinations);
+  renderHeader();
+}
 function openTripSettingsModal(){
   const t = data.trip, s = data.sync;
   const html = `
     <div class="modal-head"><h2>Trip & sync</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <label>Trip name</label>
     <input type="text" id="m-tripname" value="${escapeHtml(t.name||'')}">
-    <label>Destination</label>
-    <input type="text" id="m-destination" placeholder="e.g. Kauai, Hawaii" value="${escapeHtml(t.destination||'')}">
+    <label>Destinations (cities, states, or countries)</label>
+    <div class="chip-list" id="destChipList">${renderDestChips(t.destinations||[])}</div>
+    <div class="row">
+      <input type="text" id="m-destnew" placeholder="e.g. Rome, Italy">
+      <button type="button" class="btn btn-ghost" style="flex:0 0 auto;" onclick="addDestination()">+ Add</button>
+    </div>
     <div class="row">
       <div><label>Start date</label><input type="date" id="m-start" value="${t.start||''}"></div>
       <div><label>End date</label><input type="date" id="m-end" value="${t.end||''}"></div>
@@ -1379,7 +1419,8 @@ function saveTripSettings(){
   snapshotForUndo();
   data.trip = {
     name: document.getElementById('m-tripname').value.trim() || 'My Trip',
-    destination: document.getElementById('m-destination').value.trim(),
+    destination: data.trip.destination || '',
+    destinations: data.trip.destinations || [],
     start: document.getElementById('m-start').value,
     end: document.getElementById('m-end').value,
     notes: document.getElementById('m-tripnotes').value
@@ -1408,9 +1449,10 @@ let activeDayId = null;
 let blockPlaceSortMode = 'name';
 let pdState = {row:null, dragActive:false, startHour:null, endHour:null, dayId:null, x:0, y:0, timer:null};
 
+const WEEKDAY_2LETTER = ['Su','Mo','Tu','We','Th','Fr','Sa'];
 function fmtDateWeekday(iso){
   const d = new Date(iso+'T00:00:00');
-  const wd = d.toLocaleDateString(undefined,{weekday:'short'});
+  const wd = WEEKDAY_2LETTER[d.getDay()];
   return wd+' '+(d.getMonth()+1)+'/'+d.getDate();
 }
 function dayLabel(day, idx){
@@ -1614,22 +1656,31 @@ function colorForType(type){
 }
 
 function placeDetailsHtml(p, compact){
-  const parts = [];
-  if(p.mustDo) parts.push(`<span class="mustdo-pill mustdo-${p.mustDo.toLowerCase()}">${escapeHtml(p.mustDo)}</span>`);
+  const lineParts = [];
+  if(p.mustDo) lineParts.push(`<span class="mustdo-pill mustdo-${p.mustDo.toLowerCase()}">${escapeHtml(p.mustDo)}</span>`);
   const typeLine = [p.type,p.subtype].filter(Boolean).join(' · ');
-  if(typeLine) parts.push(`<div class="activity-detail">${escapeHtml(typeLine)}</div>`);
+  if(typeLine) lineParts.push(`<span>${escapeHtml(typeLine)}</span>`);
   const locLine = [p.area,p.location].filter(Boolean).join(' — ');
-  if(locLine) parts.push(`<div class="activity-detail">📍 ${escapeHtml(locLine)} <a href="${placeMapUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="text-decoration:none;">🗺</a></div>`);
-  if(p.tasks) parts.push(`<div class="activity-detail">✔ ${escapeHtml(p.tasks)}</div>`);
-  if(p.notes) parts.push(`<div class="activity-detail">📝 ${escapeHtml(p.notes)}</div>`);
-  return parts.join('');
+  if(locLine) lineParts.push(`<span>📍 ${escapeHtml(locLine)} <a href="${placeMapUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="text-decoration:none;">🗺</a></span>`);
+  if(p.notes) lineParts.push(`<span>📝 ${escapeHtml(p.notes)}</span>`);
+  let html = '';
+  if(lineParts.length){
+    html += `<div class="activity-detail place-detail-line">${lineParts.join('<span class="place-detail-dot">·</span>')}</div>`;
+  }
+  if(p.tasks) html += `<div class="activity-detail">✔ ${escapeHtml(p.tasks)}</div>`;
+  return html;
+}
+function truncateText(s, max){
+  if(!s) return '';
+  const oneLine = s.replace(/\s+/g,' ').trim();
+  return oneLine.length>max ? oneLine.slice(0,max)+'…' : oneLine;
 }
 function blockInnerHtml(b){
   if(b.placeId){
     const p = data.places.find(pl=>pl.id===b.placeId);
     if(!p) return `<div class="cal-block-title">(Place removed)</div>`;
     return `<a class="cal-block-map" href="${placeMapUrl(p)}" target="_blank" rel="noopener" title="Open in Google Maps">🗺</a>
-      <div class="cal-block-title">${escapeHtml(p.name)}</div>${p.area?`<div class="cal-block-sub">${escapeHtml(p.area)}</div>`:''}${p.notes?'<div class="cal-block-sub">📝</div>':''}`;
+      <div class="cal-block-title">${escapeHtml(p.name)}</div>${p.area?`<div class="cal-block-sub">${escapeHtml(p.area)}</div>`:''}${p.notes?`<div class="cal-block-sub">📝 ${escapeHtml(truncateText(p.notes, 60))}</div>`:''}`;
   }
   return `<div class="cal-block-title">${escapeHtml((b.text||'Note').split('\n')[0])}</div>`;
 }
@@ -1657,7 +1708,7 @@ function updateSelectionOverlay(){
   overlay.style.height = height+'px';
 }
 let blockDragState = {active:false, dragging:false, el:null, dayId:null, blockId:null, startY:0, startX:0, startTop:0, origStartMin:0, origEndMin:0, timer:null};
-const BLOCK_DRAG_HOLD_MS = 3000;
+const BLOCK_DRAG_HOLD_MS = 1000;
 function initCalendarEvents(){
   const grid = document.getElementById('calendarGrid');
   grid.addEventListener('pointerdown', e=>{
@@ -2236,6 +2287,41 @@ function setMapStatus(msg){
   const el = document.getElementById('placesMapStatus');
   if(el) el.textContent = msg;
 }
+function extractLatLngFromMapsUrl(url){
+  if(!url) return null;
+  let m = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return {lat: parseFloat(m[1]), lng: parseFloat(m[2])};
+  m = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if(m) return {lat: parseFloat(m[1]), lng: parseFloat(m[2])};
+  m = url.match(/[?&]q=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return {lat: parseFloat(m[1]), lng: parseFloat(m[2])};
+  m = url.match(/[?&]ll=(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if(m) return {lat: parseFloat(m[1]), lng: parseFloat(m[2])};
+  return null;
+}
+function extractCoordsFromModal(placeId){
+  const url = document.getElementById('m-pmapsurl').value.trim();
+  const coords = extractLatLngFromMapsUrl(url);
+  const statusEl = document.getElementById('m-pcoordstatus');
+  if(!coords){
+    statusEl.textContent = "Couldn't find coordinates in that link. Open the place in Google Maps, make sure the address bar shows something like \"@21.98,-159.37\", then copy that URL.";
+    return;
+  }
+  if(placeId){
+    snapshotForUndo();
+    const idx = data.places.findIndex(p=>p.id===placeId);
+    if(idx>-1){
+      data.places[idx].lat = coords.lat;
+      data.places[idx].lng = coords.lng;
+      delete data.places[idx].geocodeFailed;
+      persist();
+    }
+    statusEl.textContent = `✓ Pinned at ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`;
+    toast('Coordinates saved');
+  } else {
+    statusEl.textContent = `Found ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)} — will be pinned once you save this place.`;
+  }
+}
 async function geocodePlace(p){
   const dest = data.trip.destination;
   const q1 = [p.name, p.location, p.area, dest].filter(Boolean).join(', ');
@@ -2278,6 +2364,25 @@ async function renderPlacesMap(){
   setTimeout(()=>{ if(leafletMap) leafletMap.invalidateSize(); }, 60);
 
   const rows = getFilteredSortedPlaces();
+
+  // Free, instant pass: pull coordinates straight out of any saved Google Maps link first.
+  let extractedCount = 0;
+  rows.forEach(p=>{
+    if((p.lat==null || p.lng==null) && p.mapsUrl){
+      const coords = extractLatLngFromMapsUrl(p.mapsUrl);
+      if(coords){
+        const idx = data.places.findIndex(x=>x.id===p.id);
+        if(idx>-1){
+          data.places[idx].lat = coords.lat;
+          data.places[idx].lng = coords.lng;
+          delete data.places[idx].geocodeFailed;
+          extractedCount++;
+        }
+      }
+    }
+  });
+  if(extractedCount) persist();
+
   const needsGeocode = rows.filter(p => (p.lat==null || p.lng==null) && !p.geocodeFailed);
   let errorCount = 0, lastError = '';
   if(needsGeocode.length){
@@ -2407,12 +2512,14 @@ function openPlaceModal(id){
     <input type="text" id="m-plocation" placeholder="Address, trailhead, landmark…" value="${existing?escapeHtml(existing.location||''):''}">
     <label>Google Maps link (optional)</label>
     <input type="text" id="m-pmapsurl" placeholder="Paste a Google Maps share link — or leave blank to auto-search" value="${existing?escapeHtml(existing.mapsUrl||''):''}">
-    <small class="hint">A map icon 🗺 shows up next to this place in the Places list once saved.</small>
+    <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="extractCoordsFromModal('${existing?existing.id:''}')">📍 Grab coordinates from this link</button>
+    <div id="m-pcoordstatus" class="hint" style="margin-top:4px;">${(existing&&existing.lat!=null)?`✓ Pinned at ${existing.lat.toFixed(4)}, ${existing.lng.toFixed(4)}`:''}</div>
+    <small class="hint">Most reliable way to get this place pinned on the Places map — open it in Google Maps, share/copy the link, paste it here, then tap above.</small>
     <label>Tasks</label>
     <textarea id="m-ptasks" placeholder="e.g. Book permit, reserve parking">${existing?escapeHtml(existing.tasks||''):''}</textarea>
     <label>Notes</label>
     <textarea id="m-pnotes">${existing?escapeHtml(existing.notes||''):''}</textarea>
-    <small class="hint">These notes carry over automatically to that day's Notes whenever you use this place in a Days block.</small>
+    <small class="hint">Shown on any Days block using this place.</small>
     <div class="row" style="margin-top:14px;">
       ${existing?`<button class="btn btn-danger" onclick="deletePlace('${existing.id}')">Delete</button>`:''}
       <button class="btn btn-primary" onclick="savePlace('${existing?existing.id:''}')">Save place</button>
