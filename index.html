@@ -295,6 +295,18 @@
     border-radius:14px; padding:4px 6px 4px 10px; font-size:12.5px; font-weight:600; color:var(--ink);
   }
   .chip button{background:none; border:none; color:var(--ink-soft); font-size:14px; cursor:pointer; padding:0 4px; line-height:1;}
+  .dest-row{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:8px 0; border-top:1px dashed var(--line);
+  }
+  .dest-row:first-child{border-top:none;}
+  .dest-row-name{font-size:13.5px; font-weight:700;}
+  .dest-row-dates{font-size:11.5px; color:var(--ink-soft); margin-top:1px;}
+  .day-list-group-header{
+    font-size:11px; text-transform:uppercase; letter-spacing:0.08em; font-weight:700;
+    color:var(--teal); padding:10px 4px 4px;
+  }
+  .day-list-group-header:first-child{padding-top:2px;}
   .sync-status.ok{color:var(--teal); font-weight:700;}
 
   @media print{
@@ -1026,10 +1038,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button class="day-nav-btn" id="dayNavNext" onclick="navigateDay(1)" aria-label="Next day">›</button>
         <button class="day-nav-jump" onclick="openDayListModal()" aria-label="All days">📅</button>
       </div>
-      <div class="row no-print" style="margin-top:8px;">
-        <button class="btn btn-ghost btn-sm" id="swapDayBtn" onclick="openSwapDayModal()">⇄ Swap plans</button>
-        <button class="btn btn-danger btn-sm" id="deleteDayBtn" onclick="deleteActiveDay()">Delete this day</button>
-      </div>
       <small class="hint" id="calendarHint" style="display:block; margin:8px 0;">Tap an hour for a quick block. Drag a block to reschedule it — press and hold empty space for 1 second, then drag.</small>
       <div class="calendar-wrap">
         <div class="calendar-grid" id="calendarGrid"></div>
@@ -1069,6 +1077,9 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="section-title" style="margin:0; flex:1;">Places</div>
         <button class="btn btn-primary btn-sm" style="flex:0 0 auto;" onclick="openPlaceModal()">+ Add place</button>
       </div>
+      <select id="pf-destination" onchange="renderPlaces()" style="margin-bottom:10px; font-weight:700;">
+        <option value="">All destinations</option>
+      </select>
       <div class="card filter-card">
         <div class="row">
           <select id="pf-mustdo" onchange="renderPlaces()">
@@ -1214,8 +1225,15 @@ function loadData(){
       if(!parsed.typeColors) parsed.typeColors = {};
       if(!parsed.sync) parsed.sync = {url:'', key:'', code:''};
       if(parsed.checklistNotes===undefined) parsed.checklistNotes = '';
-      if(parsed.trip && !Array.isArray(parsed.trip.destinations)){
-        parsed.trip.destinations = parsed.trip.destination ? [parsed.trip.destination] : [];
+      if(parsed.trip){
+        if(!Array.isArray(parsed.trip.destinations)) parsed.trip.destinations = [];
+        parsed.trip.destinations = parsed.trip.destinations.map(d=>{
+          if(typeof d === 'string') return {id:cid(), name:d, start:'', end:''};
+          return d;
+        });
+        if(!parsed.trip.destinations.length && parsed.trip.destination){
+          parsed.trip.destinations = [{id:cid(), name:parsed.trip.destination, start:'', end:''}];
+        }
       }
       (parsed.days||[]).forEach(day=>{
         (day.activities||[]).forEach(b=>{
@@ -1344,30 +1362,49 @@ function fmtDate(iso){
   const d = new Date(iso+'T00:00:00');
   return (d.getMonth()+1)+'/'+d.getDate();
 }
-function renderDestChips(destinations){
-  if(!destinations || !destinations.length) return '<div style="font-size:12.5px;color:var(--ink-soft);padding:4px 0;">No destinations added yet</div>';
-  return destinations.map((d,i)=>`<span class="chip">${escapeHtml(d)} <button type="button" onclick="removeDestination(${i})" aria-label="Remove">&times;</button></span>`).join('');
+function renderDestList(destinations){
+  if(!destinations || !destinations.length) return '<div style="font-size:12.5px;color:var(--ink-soft);padding:4px 0;">No destinations added yet — days won\'t be grouped and Places won\'t have a destination switcher until you add some.</div>';
+  return destinations.map(d=>`
+    <div class="dest-row">
+      <div>
+        <div class="dest-row-name">${escapeHtml(d.name)}</div>
+        <div class="dest-row-dates">${d.start&&d.end ? fmtDate(d.start)+' – '+fmtDate(d.end) : 'No date range set'}</div>
+      </div>
+      <button type="button" class="del" onclick="removeDestination('${d.id}')" aria-label="Remove">&times;</button>
+    </div>
+  `).join('');
+}
+function destinationForDate(dateStr){
+  if(!dateStr || !data.trip.destinations) return null;
+  return data.trip.destinations.find(d=> d.start && d.end && dateStr>=d.start && dateStr<=d.end) || null;
+}
+function refreshDestinationUI(){
+  const listEl = document.getElementById('destList');
+  if(listEl) listEl.innerHTML = renderDestList(data.trip.destinations);
+  renderHeader();
+  populateDestinationFilterOptions();
 }
 function addDestination(){
-  const input = document.getElementById('m-destnew');
-  const val = input.value.trim();
-  if(!val) return;
+  const name = document.getElementById('m-destnew-name').value.trim();
+  const start = document.getElementById('m-destnew-start').value;
+  const end = document.getElementById('m-destnew-end').value;
+  if(!name) return;
   snapshotForUndo();
   if(!data.trip.destinations) data.trip.destinations = [];
-  data.trip.destinations.push(val);
-  data.trip.destination = data.trip.destinations.join(', ');
+  data.trip.destinations.push({id:cid(), name, start, end});
+  data.trip.destination = data.trip.destinations.map(d=>d.name).join(', ');
   persist();
-  input.value = '';
-  document.getElementById('destChipList').innerHTML = renderDestChips(data.trip.destinations);
-  renderHeader();
+  document.getElementById('m-destnew-name').value = '';
+  document.getElementById('m-destnew-start').value = '';
+  document.getElementById('m-destnew-end').value = '';
+  refreshDestinationUI();
 }
-function removeDestination(idx){
+function removeDestination(id){
   snapshotForUndo();
-  data.trip.destinations.splice(idx,1);
-  data.trip.destination = data.trip.destinations.join(', ');
+  data.trip.destinations = data.trip.destinations.filter(d=>d.id!==id);
+  data.trip.destination = data.trip.destinations.map(d=>d.name).join(', ');
   persist();
-  document.getElementById('destChipList').innerHTML = renderDestChips(data.trip.destinations);
-  renderHeader();
+  refreshDestinationUI();
 }
 function openTripSettingsModal(){
   const t = data.trip, s = data.sync;
@@ -1375,12 +1412,18 @@ function openTripSettingsModal(){
     <div class="modal-head"><h2>Trip & sync</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <label>Trip name</label>
     <input type="text" id="m-tripname" value="${escapeHtml(t.name||'')}">
-    <label>Destinations (cities, states, or countries)</label>
-    <div class="chip-list" id="destChipList">${renderDestChips(t.destinations||[])}</div>
-    <div class="row">
-      <input type="text" id="m-destnew" placeholder="e.g. Rome, Italy">
-      <button type="button" class="btn btn-ghost" style="flex:0 0 auto;" onclick="addDestination()">+ Add</button>
+    <label>Destinations (cities, states, or countries — each with its own dates)</label>
+    <div id="destList">${renderDestList(t.destinations||[])}</div>
+    <div class="card" style="margin:8px 0;">
+      <label>Name</label>
+      <input type="text" id="m-destnew-name" placeholder="e.g. Kauai">
+      <div class="row">
+        <div><label>Start date</label><input type="date" id="m-destnew-start"></div>
+        <div><label>End date</label><input type="date" id="m-destnew-end"></div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="addDestination()">+ Add destination</button>
     </div>
+    <small class="hint">Days that fall in a destination's date range group automatically under it — set the trip's overall start/end below too so every day still gets created.</small>
     <div class="row">
       <div><label>Start date</label><input type="date" id="m-start" value="${t.start||''}"></div>
       <div><label>End date</label><input type="date" id="m-end" value="${t.end||''}"></div>
@@ -1536,20 +1579,47 @@ function navigateDay(delta){
   activeDayId = days[newIdx].id;
   renderDayNav(); renderCalendar(); renderDayNotes();
 }
+function dayListRowHtml(d, idx){
+  return `<div class="day-list-row ${d.id===activeDayId?'active':''}" onclick="selectDayFromList('${d.id}')">
+    <div class="day-list-date">${escapeHtml(d.date ? fmtDateWeekday(d.date) : ('Day '+(idx+1)))}</div>
+    ${d.label?`<div class="day-list-title">${escapeHtml(d.label)}</div>`:''}
+  </div>`;
+}
 function openDayListModal(){
   const days = sortedDays();
-  const rowsHtml = days.length ? days.map((d,idx)=>`
-    <div class="day-list-row ${d.id===activeDayId?'active':''}" onclick="selectDayFromList('${d.id}')">
-      <div class="day-list-date">${escapeHtml(d.date ? fmtDateWeekday(d.date) : ('Day '+(idx+1)))}</div>
-      ${d.label?`<div class="day-list-title">${escapeHtml(d.label)}</div>`:''}
-    </div>
-  `).join('') : `<div style="padding:10px 0; color:var(--ink-soft); font-size:13px;">No days yet — add one below.</div>`;
+  let rowsHtml = '';
+  if(!days.length){
+    rowsHtml = `<div style="padding:10px 0; color:var(--ink-soft); font-size:13px;">No days yet — add one below.</div>`;
+  } else if(data.trip.destinations && data.trip.destinations.length){
+    const groups = [...data.trip.destinations].sort((a,b)=>(a.start||'9999').localeCompare(b.start||'9999'));
+    const used = new Set();
+    groups.forEach(dest=>{
+      const inGroup = days.filter(d=> d.date && dest.start && dest.end && d.date>=dest.start && d.date<=dest.end);
+      if(inGroup.length){
+        rowsHtml += `<div class="day-list-group-header">${escapeHtml(dest.name)}</div>`;
+        inGroup.forEach(d=>{ used.add(d.id); rowsHtml += dayListRowHtml(d, days.indexOf(d)); });
+      }
+    });
+    const others = days.filter(d=>!used.has(d.id));
+    if(others.length){
+      rowsHtml += `<div class="day-list-group-header">Other days</div>`;
+      others.forEach(d=>{ rowsHtml += dayListRowHtml(d, days.indexOf(d)); });
+    }
+  } else {
+    rowsHtml = days.map((d,idx)=>dayListRowHtml(d, idx)).join('');
+  }
   const html = `
     <div class="modal-head"><h2>Days</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <div class="day-list">${rowsHtml}</div>
     <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="addDayFromList()">+ Add day</button>
+    ${(activeDayId && days.length>1) ? `<button class="btn btn-ghost btn-block" style="margin-top:8px" onclick="closeModal(); openSwapDayModal();">⇄ Swap this day's plans</button>` : ''}
+    ${activeDayId ? `<button class="btn btn-danger btn-block" style="margin-top:8px" onclick="deleteActiveDayFromList()">🗑 Delete this day</button>` : ''}
   `;
   showModal(html);
+}
+function deleteActiveDayFromList(){
+  closeModal();
+  deleteActiveDay();
 }
 function selectDayFromList(id){
   activeDayId = id;
@@ -1578,8 +1648,6 @@ function renderCalendar(){
   const grid = document.getElementById('calendarGrid');
   const unschedCard = document.getElementById('unscheduledCard');
   const unschedWrap = document.getElementById('unscheduledList');
-  const deleteDayBtn = document.getElementById('deleteDayBtn');
-  const swapDayBtn = document.getElementById('swapDayBtn');
   const hint = document.getElementById('calendarHint');
   const days = sortedDays();
   if(!days.length){
@@ -1589,14 +1657,10 @@ function renderCalendar(){
       <p>Set your trip's start and end date (gear icon, top right) and days will appear here automatically — or add one manually below.</p>
     </div>`;
     unschedCard.style.display='none';
-    deleteDayBtn.style.display='none';
-    swapDayBtn.style.display='none';
     hint.style.display='none';
     return;
   }
   hint.style.display='block';
-  deleteDayBtn.style.display='';
-  swapDayBtn.style.display = days.length>1 ? '' : 'none';
   const day = days.find(d=>d.id===activeDayId);
   if(!day){ grid.innerHTML=''; return; }
   const scheduled = (day.activities||[]).filter(b=>b.startTime);
@@ -2204,6 +2268,14 @@ function populateFilterTypeOptions(){
   sel.innerHTML = `<option value="">Type: All</option>` + data.placeTypes.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
   sel.value = data.placeTypes.includes(current) ? current : '';
 }
+function populateDestinationFilterOptions(){
+  const sel = document.getElementById('pf-destination');
+  if(!sel) return;
+  const current = sel.value;
+  const dests = data.trip.destinations || [];
+  sel.innerHTML = '<option value="">All destinations</option>' + dests.map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+  sel.value = dests.find(d=>d.id===current) ? current : '';
+}
 function resetPlaceFilters(){
   document.getElementById('pf-mustdo').value = '';
   document.getElementById('pf-type').value = '';
@@ -2221,9 +2293,12 @@ function getFilteredSortedPlaces(){
   const type = document.getElementById('pf-type').value;
   const area = document.getElementById('pf-area').value.trim();
   const search = document.getElementById('pf-search').value.trim();
+  const destEl = document.getElementById('pf-destination');
+  const destination = destEl ? destEl.value : '';
   const rows = data.places.filter(p=>{
     if(mustdo && p.mustDo!==mustdo) return false;
     if(type && p.type!==type) return false;
+    if(destination && p.destinationId!==destination) return false;
     if(area && !matchesAnyTerm((p.area||'').toLowerCase(), area)) return false;
     if(search){
       const hay = [p.name,p.subtype,p.type,p.area,p.location,p.tasks,p.notes].join(' ').toLowerCase();
@@ -2488,6 +2563,16 @@ function openPlaceModal(id){
       <option value="Maybe" ${!existing||existing.mustDo==='Maybe'?'selected':''}>Maybe</option>
       <option value="Meh" ${existing&&existing.mustDo==='Meh'?'selected':''}>Meh</option>
     </select>
+    ${(data.trip.destinations&&data.trip.destinations.length)?`
+    <label>Destination</label>
+    <select id="m-pdestination">
+      <option value="">— Not set —</option>
+      ${data.trip.destinations.map(d=>{
+        const currentDestFilter = document.getElementById('pf-destination') ? document.getElementById('pf-destination').value : '';
+        const selectedId = existing ? existing.destinationId : currentDestFilter;
+        return `<option value="${d.id}" ${selectedId===d.id?'selected':''}>${escapeHtml(d.name)}</option>`;
+      }).join('')}
+    </select>`:''}
     <div class="row">
       <div>
         <label>Type</label>
@@ -2567,10 +2652,12 @@ function savePlace(id){
   if(area && !data.placeAreas.includes(area)) data.placeAreas.push(area);
   const existingPlace = id ? data.places.find(p=>p.id===id) : null;
   const oldTasks = existingPlace ? existingPlace.tasks || '' : null;
+  const destSel = document.getElementById('m-pdestination');
   const obj = {
     id: id || cid(),
     name: document.getElementById('m-pname').value.trim() || 'Untitled place',
     mustDo: document.getElementById('m-pmustdo').value,
+    destinationId: destSel ? (destSel.value || null) : (existingPlace ? existingPlace.destinationId||null : null),
     type: typeSel==='__new__' ? '' : typeSel,
     subtype: document.getElementById('m-psubtype').value.trim(),
     area,
@@ -2761,7 +2848,7 @@ function importData(evt){
 /* ---------- init ---------- */
 function renderAll(){
   renderHeader(); renderDays(); renderChecklist(); renderContacts();
-  populateFilterTypeOptions(); renderPlaces(); updateUndoButton();
+  populateFilterTypeOptions(); populateDestinationFilterOptions(); renderPlaces(); updateUndoButton();
 }
 function initApp(){
   initCalendarEvents();
