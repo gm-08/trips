@@ -1082,6 +1082,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <select id="pf-destination" onchange="renderPlaces()" style="font-weight:700;">
           <option value="">All destinations</option>
         </select>
+        <button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px;" onclick="openBulkAssignDestinationModal()">🏷 Assign shown places to a destination</button>
         <div class="row">
           <select id="pf-mustdo" onchange="renderPlaces()">
             <option value="">Must do: All</option>
@@ -2260,6 +2261,50 @@ function populateFilterTypeOptions(){
   const current = sel.value;
   sel.innerHTML = `<option value="">Type: All</option>` + data.placeTypes.map(t=>`<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
   sel.value = data.placeTypes.includes(current) ? current : '';
+}
+function openBulkAssignDestinationModal(){
+  const rows = getFilteredSortedPlaces();
+  if(!rows.length){ toast('No places currently shown to assign'); return; }
+  const html = `
+    <div class="modal-head"><h2>Assign to a destination</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <p style="font-size:13px; color:var(--ink-soft); margin-top:0;">Tags all <b>${rows.length}</b> place${rows.length===1?'':'s'} currently shown in the list as one destination — handy for a list you built before destinations existed, or for splitting off part of your list.</p>
+    <label>Destination</label>
+    <select id="m-bulkdest">
+      <option value="">— Select —</option>
+      ${(data.trip.destinations||[]).map(d=>`<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('')}
+    </select>
+    <label>Or create a new one</label>
+    <input type="text" id="m-bulkdest-new" placeholder="e.g. Kauai">
+    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="confirmBulkAssignDestination()">Assign ${rows.length} place${rows.length===1?'':'s'}</button>
+  `;
+  showModal(html);
+}
+function confirmBulkAssignDestination(){
+  const rows = getFilteredSortedPlaces();
+  const newName = document.getElementById('m-bulkdest-new').value.trim();
+  let destId = document.getElementById('m-bulkdest').value;
+  if(newName){
+    const existingMatch = (data.trip.destinations||[]).find(d=>d.name.toLowerCase()===newName.toLowerCase());
+    if(existingMatch) destId = existingMatch.id;
+  }
+  if(!destId && !newName){ toast('Pick or create a destination first'); return; }
+  snapshotForUndo();
+  if(newName && !destId){
+    if(!data.trip.destinations) data.trip.destinations = [];
+    const newDest = {id:cid(), name:newName};
+    data.trip.destinations.push(newDest);
+    data.trip.destination = data.trip.destinations.map(d=>d.name).join(', ');
+    destId = newDest.id;
+  }
+  const idSet = new Set(rows.map(r=>r.id));
+  data.places.forEach(p=>{ if(idSet.has(p.id)) p.destinationId = destId; });
+  persist();
+  populateDestinationFilterOptions();
+  const destSel = document.getElementById('pf-destination');
+  if(destSel) destSel.value = destId;
+  renderPlaces();
+  closeModal();
+  toast(`Assigned ${rows.length} place${rows.length===1?'':'s'}`);
 }
 function populateDestinationFilterOptions(){
   const sel = document.getElementById('pf-destination');
