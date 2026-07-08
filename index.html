@@ -1223,6 +1223,20 @@ function loadData(){
       if(!parsed.places) parsed.places = [];
       if(!parsed.placeTypes) parsed.placeTypes = ['Restaurant','Activity','Hike','Beach','Lodging','Shopping','Sight','Other'];
       if(!parsed.placeAreas) parsed.placeAreas = [...new Set((parsed.places||[]).map(p=>p.area).filter(Boolean))];
+      if(!parsed.destinationAreas){
+        const map = {};
+        (parsed.places||[]).forEach(p=>{
+          if(!p.area) return;
+          const key = p.destinationId || '';
+          if(!map[key]) map[key] = [];
+          if(!map[key].includes(p.area)) map[key].push(p.area);
+        });
+        (parsed.placeAreas||[]).forEach(a=>{
+          if(!map['']) map[''] = [];
+          if(!map[''].includes(a)) map[''].push(a);
+        });
+        parsed.destinationAreas = map;
+      }
       if(!parsed.typeColors) parsed.typeColors = {};
       if(!parsed.sync) parsed.sync = {url:'', key:'', code:''};
       if(parsed.checklistNotes===undefined) parsed.checklistNotes = '';
@@ -1264,6 +1278,7 @@ function loadData(){
     places:[],
     placeTypes:['Restaurant','Activity','Hike','Beach','Lodging','Shopping','Sight','Other'],
     placeAreas:[],
+    destinationAreas:{},
     typeColors:{},
     sync:{
       url:'https://ffmecrrdxqiggkmlckgn.supabase.co',
@@ -2621,11 +2636,16 @@ function confirmNewType(){
   document.getElementById('m-ptype-new-wrap').style.display='none';
   populateFilterTypeOptions();
 }
+let placeModalDestinationId = '';
+function areasForDestination(destKey){
+  return data.destinationAreas[destKey||''] || [];
+}
 function populateAreaSelect(selectEl, selectedVal){
+  const areas = areasForDestination(placeModalDestinationId);
   selectEl.innerHTML = '<option value="">— No area —</option>'
-    + data.placeAreas.map(a=>`<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('')
+    + areas.map(a=>`<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('')
     + `<option value="__new__">+ Add new area…</option>`;
-  selectEl.value = (selectedVal && data.placeAreas.includes(selectedVal)) ? selectedVal : '';
+  selectEl.value = (selectedVal && areas.includes(selectedVal)) ? selectedVal : '';
 }
 function handleAreaSelectChange(){
   const sel = document.getElementById('m-parea');
@@ -2635,7 +2655,9 @@ function confirmNewArea(){
   const val = document.getElementById('m-parea-new').value.trim();
   if(!val) return;
   snapshotForUndo();
-  if(!data.placeAreas.includes(val)) data.placeAreas.push(val);
+  const key = placeModalDestinationId || '';
+  if(!data.destinationAreas[key]) data.destinationAreas[key] = [];
+  if(!data.destinationAreas[key].includes(val)) data.destinationAreas[key].push(val);
   persist();
   populateAreaSelect(document.getElementById('m-parea'), val);
   document.getElementById('m-parea-new-wrap').style.display='none';
@@ -2692,6 +2714,7 @@ function openPlaceModal(id){
   `;
   showModal(html);
   populateTypeSelect(document.getElementById('m-ptype'), existing?existing.type:(data.placeTypes[0]||''));
+  placeModalDestinationId = existing ? (existing.destinationId||'') : (getActivePlacesDestination()||'');
   populateAreaSelect(document.getElementById('m-parea'), existing?existing.area:'');
   const nameField = document.getElementById('m-pname');
   setTimeout(()=>{ if(document.body.contains(nameField)){ nameField.focus(); nameField.select(); } }, 30);
@@ -2729,7 +2752,11 @@ function savePlace(id){
   const typeSel = document.getElementById('m-ptype').value;
   const areaSel = document.getElementById('m-parea').value;
   const area = areaSel==='__new__' ? '' : areaSel;
-  if(area && !data.placeAreas.includes(area)) data.placeAreas.push(area);
+  if(area){
+    const key = placeModalDestinationId || '';
+    if(!data.destinationAreas[key]) data.destinationAreas[key] = [];
+    if(!data.destinationAreas[key].includes(area)) data.destinationAreas[key].push(area);
+  }
   const existingPlace = id ? data.places.find(p=>p.id===id) : null;
   const oldTasks = existingPlace ? existingPlace.tasks || '' : null;
   const obj = {
