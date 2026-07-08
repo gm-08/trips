@@ -151,6 +151,16 @@
   }
   .day-nav-jump:active{background:var(--paper-dark);}
 
+  .day-list{max-height:50vh; overflow-y:auto;}
+  .day-list-row{
+    padding:10px 4px; border-top:1px dashed var(--line); cursor:pointer;
+  }
+  .day-list-row:first-child{border-top:none;}
+  .day-list-row:active{background:var(--paper-dark);}
+  .day-list-row.active{background:#FBF3E1;}
+  .day-list-date{font-size:14px; font-weight:700;}
+  .day-list-title{font-size:12px; color:var(--teal); font-weight:700; margin-top:2px;}
+
   .calendar-wrap{
     position:relative; border:1px solid var(--line); border-radius:14px;
     background:var(--card); overflow:hidden; margin-bottom:4px;
@@ -1006,10 +1016,9 @@ svg.leaflet-image-layer.leaflet-interactive path {
           <div class="day-nav-title" id="dayNavTitle"></div>
         </div>
         <button class="day-nav-btn" id="dayNavNext" onclick="navigateDay(1)" aria-label="Next day">›</button>
-        <button class="day-nav-jump" onclick="openDateJump()" aria-label="Jump to date">📅</button>
+        <button class="day-nav-jump" onclick="openDayListModal()" aria-label="All days">📅</button>
       </div>
-      <input type="date" id="dayJumpInput" style="position:absolute; opacity:0; width:0; height:0; pointer-events:none;" onchange="jumpToDate(this.value)">
-      <small class="hint" id="calendarHint" style="display:block; margin:8px 0;">Tap an hour for a quick block. Drag a block to reschedule it — press and hold empty space, then drag, to select multiple hours.</small>
+      <small class="hint" id="calendarHint" style="display:block; margin:8px 0;">Tap an hour for a quick block. Drag a block to reschedule it — press and hold empty space for 3 seconds, then drag.</small>
       <div class="calendar-wrap">
         <div class="calendar-grid" id="calendarGrid"></div>
       </div>
@@ -1023,7 +1032,6 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <button class="btn btn-ghost btn-block" style="margin-top:10px" onclick="saveDayNotes()">Save notes</button>
       </div>
       <div class="row no-print" style="margin-top:12px;">
-        <button class="btn btn-ghost btn-sm" onclick="addDayDirect()">+ Add day</button>
         <button class="btn btn-ghost btn-sm" id="swapDayBtn" onclick="openSwapDayModal()">⇄ Swap plans</button>
         <button class="btn btn-danger btn-sm" id="deleteDayBtn" onclick="deleteActiveDay()">Delete this day</button>
       </div>
@@ -1486,25 +1494,29 @@ function navigateDay(delta){
   activeDayId = days[newIdx].id;
   renderDayNav(); renderCalendar(); renderDayNotes();
 }
-function openDateJump(){
-  const input = document.getElementById('dayJumpInput');
-  const day = data.days.find(d=>d.id===activeDayId);
-  if(day && day.date) input.value = day.date;
-  if(input.showPicker){ try{ input.showPicker(); return; }catch(e){} }
-  input.click();
+function openDayListModal(){
+  const days = sortedDays();
+  const rowsHtml = days.length ? days.map((d,idx)=>`
+    <div class="day-list-row ${d.id===activeDayId?'active':''}" onclick="selectDayFromList('${d.id}')">
+      <div class="day-list-date">${escapeHtml(d.date ? fmtDateWeekday(d.date) : ('Day '+(idx+1)))}</div>
+      ${d.label?`<div class="day-list-title">${escapeHtml(d.label)}</div>`:''}
+    </div>
+  `).join('') : `<div style="padding:10px 0; color:var(--ink-soft); font-size:13px;">No days yet — add one below.</div>`;
+  const html = `
+    <div class="modal-head"><h2>Days</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="day-list">${rowsHtml}</div>
+    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="addDayFromList()">+ Add day</button>
+  `;
+  showModal(html);
 }
-function jumpToDate(dateStr){
-  if(!dateStr) return;
-  let day = data.days.find(d=>d.date===dateStr);
-  if(!day){
-    if(!confirm('No day set for '+dateStr+' yet. Add one?')) return;
-    snapshotForUndo();
-    day = {id:cid(), label:'', date:dateStr, activities:[]};
-    data.days.push(day);
-    persist();
-  }
-  activeDayId = day.id;
+function selectDayFromList(id){
+  activeDayId = id;
+  closeModal();
   renderDayNav(); renderCalendar(); renderDayNotes();
+}
+function addDayFromList(){
+  addDayDirect();
+  openDayListModal();
 }
 function renderDayNotes(){
   const el = document.getElementById('f-daynotes');
@@ -1601,12 +1613,23 @@ function colorForType(type){
   return assigned;
 }
 
+function placeDetailsHtml(p, compact){
+  const parts = [];
+  if(p.mustDo) parts.push(`<span class="mustdo-pill mustdo-${p.mustDo.toLowerCase()}">${escapeHtml(p.mustDo)}</span>`);
+  const typeLine = [p.type,p.subtype].filter(Boolean).join(' · ');
+  if(typeLine) parts.push(`<div class="activity-detail">${escapeHtml(typeLine)}</div>`);
+  const locLine = [p.area,p.location].filter(Boolean).join(' — ');
+  if(locLine) parts.push(`<div class="activity-detail">📍 ${escapeHtml(locLine)} <a href="${placeMapUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="text-decoration:none;">🗺</a></div>`);
+  if(p.tasks) parts.push(`<div class="activity-detail">✔ ${escapeHtml(p.tasks)}</div>`);
+  if(p.notes) parts.push(`<div class="activity-detail">📝 ${escapeHtml(p.notes)}</div>`);
+  return parts.join('');
+}
 function blockInnerHtml(b){
   if(b.placeId){
     const p = data.places.find(pl=>pl.id===b.placeId);
     if(!p) return `<div class="cal-block-title">(Place removed)</div>`;
     return `<a class="cal-block-map" href="${placeMapUrl(p)}" target="_blank" rel="noopener" title="Open in Google Maps">🗺</a>
-      <div class="cal-block-title">${escapeHtml(p.name)}</div>${p.area?`<div class="cal-block-sub">${escapeHtml(p.area)}</div>`:''}`;
+      <div class="cal-block-title">${escapeHtml(p.name)}</div>${p.area?`<div class="cal-block-sub">${escapeHtml(p.area)}</div>`:''}${p.notes?'<div class="cal-block-sub">📝</div>':''}`;
   }
   return `<div class="cal-block-title">${escapeHtml((b.text||'Note').split('\n')[0])}</div>`;
 }
@@ -1616,8 +1639,7 @@ function renderUnscheduledCardHtml(dayId, b){
     if(!p) return `<div class="activity" onclick="openBlockModal('${dayId}','${b.id}')"><div class="activity-detail">(Linked place was deleted)</div></div>`;
     return `<div class="activity" onclick="openBlockModal('${dayId}','${b.id}')">
       <div class="activity-title">${escapeHtml(p.name)}</div>
-      ${(p.type||p.subtype)?`<div class="activity-detail">${escapeHtml([p.type,p.subtype].filter(Boolean).join(' · '))}</div>`:''}
-      ${(p.area||p.location)?`<div class="activity-detail">📍 ${escapeHtml([p.area,p.location].filter(Boolean).join(' — '))} <a href="${placeMapUrl(p)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="text-decoration:none;">🗺</a></div>`:''}
+      ${placeDetailsHtml(p)}
       ${b.text?`<div class="activity-detail">${escapeHtml(b.text)}</div>`:''}
     </div>`;
   }
@@ -1634,7 +1656,8 @@ function updateSelectionOverlay(){
   overlay.style.top = top+'px';
   overlay.style.height = height+'px';
 }
-let blockDragState = {active:false, dragging:false, el:null, dayId:null, blockId:null, startY:0, startTop:0, origStartMin:0, origEndMin:0};
+let blockDragState = {active:false, dragging:false, el:null, dayId:null, blockId:null, startY:0, startX:0, startTop:0, origStartMin:0, origEndMin:0, timer:null};
+const BLOCK_DRAG_HOLD_MS = 3000;
 function initCalendarEvents(){
   const grid = document.getElementById('calendarGrid');
   grid.addEventListener('pointerdown', e=>{
@@ -1652,9 +1675,17 @@ function initCalendarEvents(){
       blockDragState.dayId = dayId;
       blockDragState.blockId = blockId;
       blockDragState.startY = e.clientY;
+      blockDragState.startX = e.clientX;
       blockDragState.startTop = parseFloat(blockEl.style.top) || 0;
       blockDragState.origStartMin = timeToMinutes(b.startTime);
       blockDragState.origEndMin = b.endTime ? timeToMinutes(b.endTime) : blockDragState.origStartMin+60;
+      clearTimeout(blockDragState.timer);
+      blockDragState.timer = setTimeout(()=>{
+        if(blockDragState.active){
+          blockDragState.dragging = true;
+          blockDragState.el.classList.add('dragging');
+        }
+      }, BLOCK_DRAG_HOLD_MS);
       return;
     }
 
@@ -1675,14 +1706,17 @@ function initCalendarEvents(){
   grid.addEventListener('pointermove', e=>{
     if(blockDragState.active){
       const dy = e.clientY - blockDragState.startY;
-      if(!blockDragState.dragging && Math.abs(dy) > 6){
-        blockDragState.dragging = true;
-        blockDragState.el.classList.add('dragging');
+      const dx = e.clientX - blockDragState.startX;
+      if(!blockDragState.dragging){
+        if(Math.abs(dx)>15 || Math.abs(dy)>15){
+          // moved before the hold completed — treat as a scroll/abort, not a drag
+          clearTimeout(blockDragState.timer);
+          blockDragState.active = false;
+        }
+        return;
       }
-      if(blockDragState.dragging){
-        e.preventDefault();
-        blockDragState.el.style.top = (blockDragState.startTop + dy) + 'px';
-      }
+      e.preventDefault();
+      blockDragState.el.style.top = (blockDragState.startTop + dy) + 'px';
       return;
     }
     if(!pdState.row) return;
@@ -1701,6 +1735,7 @@ function initCalendarEvents(){
   });
   window.addEventListener('pointerup', ()=>{
     if(blockDragState.active){
+      clearTimeout(blockDragState.timer);
       const wasDragging = blockDragState.dragging;
       const dayId = blockDragState.dayId, blockId = blockDragState.blockId;
       if(wasDragging){
@@ -1836,6 +1871,7 @@ function refreshBlockPlaceOptions(){
   const filterText = filterEl ? filterEl.value : '';
   sel.innerHTML = '<option value="">— Free write —</option>' + buildPlaceOptions(current, filterText);
   sel.value = current;
+  renderBlockPlacePreview();
 }
 
 function parseTimeString(str){
@@ -1889,10 +1925,11 @@ function openBlockModal(dayId, blockId, prefillStartHour, prefillEndHour){
       <button type="button" class="btn btn-ghost btn-sm" id="sortByNameBtn" onclick="setBlockPlaceSort('name')">Sort: Name</button>
       <button type="button" class="btn btn-ghost btn-sm" id="sortByAreaBtn" onclick="setBlockPlaceSort('area')">Sort: Area</button>
     </div>
-    <select id="m-bplace" onchange="updateBlockTextLabel()">
+    <select id="m-bplace" onchange="updateBlockTextLabel(); renderBlockPlacePreview();">
       <option value="">— Free write —</option>
       ${buildPlaceOptions(existing?existing.placeId:null, '')}
     </select>
+    <div id="m-bplacepreview" class="card" style="margin:8px 0 0; display:none;"></div>
     <label id="m-btext-label">${hasPlace?'Notes (optional)':"What's the plan?"}</label>
     <textarea id="m-btext" placeholder="${hasPlace?'Anything extra for this stop':'Free write anything you want here'}">${existing?escapeHtml(existing.text||''):''}</textarea>
     <div class="row" style="margin-top:14px;">
@@ -1903,6 +1940,18 @@ function openBlockModal(dayId, blockId, prefillStartHour, prefillEndHour){
   showModal(html);
   document.getElementById('sortByNameBtn').classList.toggle('active-sort', blockPlaceSortMode==='name');
   document.getElementById('sortByAreaBtn').classList.toggle('active-sort', blockPlaceSortMode==='area');
+  renderBlockPlacePreview();
+}
+function renderBlockPlacePreview(){
+  const sel = document.getElementById('m-bplace');
+  const box = document.getElementById('m-bplacepreview');
+  if(!sel || !box) return;
+  const p = data.places.find(pl=>pl.id===sel.value);
+  if(!p){ box.style.display='none'; box.innerHTML=''; return; }
+  const details = placeDetailsHtml(p);
+  if(!details){ box.style.display='none'; box.innerHTML=''; return; }
+  box.style.display='block';
+  box.innerHTML = `<div style="font-weight:700; font-size:13px; margin-bottom:4px;">${escapeHtml(p.name)}</div>${details}`;
 }
 function updateBlockTextLabel(){
   const sel = document.getElementById('m-bplace');
@@ -1923,19 +1972,13 @@ function saveBlock(dayId, blockId){
     if(!endTime){ toast('Couldn\'t understand that end time — try "1:30pm" or "13:30"'); return; }
   }
   const placeId = document.getElementById('m-bplace').value || null;
-  const existingBlock = blockId ? day.activities.find(a=>a.id===blockId) : null;
   const obj = {
     id: blockId || cid(),
     startTime,
     endTime,
     placeId,
-    text: document.getElementById('m-btext').value.trim(),
-    notesTransferredFor: existingBlock ? existingBlock.notesTransferredFor : null
+    text: document.getElementById('m-btext').value.trim()
   };
-  if(placeId && placeId !== obj.notesTransferredFor){
-    transferPlaceNotesToDay(placeId, day);
-    obj.notesTransferredFor = placeId;
-  }
   if(blockId){
     const idx = day.activities.findIndex(a=>a.id===blockId);
     day.activities[idx] = obj;
@@ -1944,13 +1987,6 @@ function saveBlock(dayId, blockId){
   }
   day.activities.sort((a,b)=> (a.startTime||'99:99').localeCompare(b.startTime||'99:99'));
   persist(); renderDays(); closeModal(); toast('Saved');
-}
-function transferPlaceNotesToDay(placeId, day){
-  const place = data.places.find(p=>p.id===placeId);
-  if(!place || !place.notes || !place.notes.trim()) return;
-  const entry = `${place.name}: ${place.notes.trim()}`;
-  if(day.notes && day.notes.includes(entry)) return;
-  day.notes = day.notes ? day.notes + '\n\n' + entry : entry;
 }
 function deleteBlock(dayId, blockId){
   snapshotForUndo();
@@ -2201,19 +2237,33 @@ function setMapStatus(msg){
   if(el) el.textContent = msg;
 }
 async function geocodePlace(p){
-  const q = [p.name, p.location, p.area, data.trip.destination].filter(Boolean).join(', ');
-  if(!q) return null;
-  try{
-    const resp = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
-    if(!resp.ok) return null;
-    const results = await resp.json();
-    if(results && results.length){
-      return { lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) };
+  const dest = data.trip.destination;
+  const q1 = [p.name, p.location, p.area, dest].filter(Boolean).join(', ');
+  const q2 = [p.name, dest].filter(Boolean).join(', ');
+  const queries = [q1];
+  if(q2 && q2 !== q1) queries.push(q2);
+  if(!queries.length || !queries[0]) return {status:'notfound'};
+  for(let i=0; i<queries.length; i++){
+    try{
+      const resp = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(queries[i]));
+      if(!resp.ok) return {status:'error', message:'HTTP '+resp.status};
+      const results = await resp.json();
+      if(results && results.length){
+        return {status:'ok', lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon)};
+      }
+    }catch(e){
+      return {status:'error', message: e.message || 'connection blocked'};
     }
-  }catch(e){ /* offline or blocked — leave ungeocoded */ }
-  return null;
+    if(i < queries.length-1) await sleep(1100);
+  }
+  return {status:'notfound'};
 }
 function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+function retryFailedGeocodes(){
+  data.places.forEach(p=>{ if(p.geocodeFailed) delete p.geocodeFailed; });
+  persist();
+  renderPlacesMap();
+}
 async function renderPlacesMap(){
   const mapEl = document.getElementById('placesMapEl');
   if(!mapEl) return;
@@ -2229,6 +2279,7 @@ async function renderPlacesMap(){
 
   const rows = getFilteredSortedPlaces();
   const needsGeocode = rows.filter(p => (p.lat==null || p.lng==null) && !p.geocodeFailed);
+  let errorCount = 0, lastError = '';
   if(needsGeocode.length){
     setMapStatus(`Locating places… (0/${needsGeocode.length})`);
     for(let i=0; i<needsGeocode.length; i++){
@@ -2236,8 +2287,9 @@ async function renderPlacesMap(){
       const result = await geocodePlace(p);
       const idx = data.places.findIndex(x=>x.id===p.id);
       if(idx>-1){
-        if(result){ data.places[idx].lat = result.lat; data.places[idx].lng = result.lng; }
-        else { data.places[idx].geocodeFailed = true; }
+        if(result.status==='ok'){ data.places[idx].lat = result.lat; data.places[idx].lng = result.lng; }
+        else if(result.status==='notfound'){ data.places[idx].geocodeFailed = true; }
+        else { errorCount++; lastError = result.message || 'connection issue'; }
       }
       setMapStatus(`Locating places… (${i+1}/${needsGeocode.length})`);
       if(i < needsGeocode.length-1) await sleep(1100); // respect Nominatim's fair-use rate limit
@@ -2269,8 +2321,11 @@ async function renderPlacesMap(){
   if(pins.length){
     leafletMap.fitBounds(pins, {padding:[30,30], maxZoom:14});
   }
-  if(missed.length){
-    setMapStatus(`Couldn't locate: ${missed.join(', ')}`);
+  const retryLink = `<a href="#" onclick="event.preventDefault(); retryFailedGeocodes();" style="color:var(--teal); font-weight:700;">Retry</a>`;
+  if(errorCount>0){
+    document.getElementById('placesMapStatus').innerHTML = `${pins.length} placed — ${errorCount} couldn't be reached (${escapeHtml(lastError)}). If this file is open from a local file:// address rather than hosted online, try opening it through a hosted URL instead. ${retryLink}`;
+  } else if(missed.length){
+    document.getElementById('placesMapStatus').innerHTML = `${pins.length} placed. No match found for: ${escapeHtml(missed.join(', '))}. Try editing those places with a more specific location. ${retryLink}`;
   } else if(pins.length){
     setMapStatus(`${pins.length} place${pins.length===1?'':'s'} on the map`);
   } else {
@@ -2387,8 +2442,7 @@ function confirmAddToDay(placeId){
   const day = data.days.find(d=>d.id===dayId);
   if(!day) return;
   snapshotForUndo();
-  transferPlaceNotesToDay(placeId, day);
-  day.activities.push({id:cid(), startTime:'', endTime:'', placeId, text:'', notesTransferredFor:placeId});
+  day.activities.push({id:cid(), startTime:'', endTime:'', placeId, text:''});
   persist();
   closeModal();
   toast('Added — set a time for it in the Days tab');
