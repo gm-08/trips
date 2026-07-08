@@ -1077,10 +1077,11 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="section-title" style="margin:0; flex:1;">Places</div>
         <button class="btn btn-primary btn-sm" style="flex:0 0 auto;" onclick="openPlaceModal()">+ Add place</button>
       </div>
-      <select id="pf-destination" onchange="renderPlaces()" style="margin-bottom:10px; font-weight:700;">
-        <option value="">All destinations</option>
-      </select>
       <div class="card filter-card">
+        <label style="margin-top:0;">Destination</label>
+        <select id="pf-destination" onchange="renderPlaces()" style="font-weight:700;">
+          <option value="">All destinations</option>
+        </select>
         <div class="row">
           <select id="pf-mustdo" onchange="renderPlaces()">
             <option value="">Must do: All</option>
@@ -1363,20 +1364,13 @@ function fmtDate(iso){
   return (d.getMonth()+1)+'/'+d.getDate();
 }
 function renderDestList(destinations){
-  if(!destinations || !destinations.length) return '<div style="font-size:12.5px;color:var(--ink-soft);padding:4px 0;">No destinations added yet — days won\'t be grouped and Places won\'t have a destination switcher until you add some.</div>';
+  if(!destinations || !destinations.length) return '<div style="font-size:12.5px;color:var(--ink-soft);padding:4px 0;">No destinations added yet — Days grouping and the Places switcher will appear once you add some.</div>';
   return destinations.map(d=>`
     <div class="dest-row">
-      <div>
-        <div class="dest-row-name">${escapeHtml(d.name)}</div>
-        <div class="dest-row-dates">${d.start&&d.end ? fmtDate(d.start)+' – '+fmtDate(d.end) : 'No date range set'}</div>
-      </div>
+      <div class="dest-row-name">${escapeHtml(d.name)}</div>
       <button type="button" class="del" onclick="removeDestination('${d.id}')" aria-label="Remove">&times;</button>
     </div>
   `).join('');
-}
-function destinationForDate(dateStr){
-  if(!dateStr || !data.trip.destinations) return null;
-  return data.trip.destinations.find(d=> d.start && d.end && dateStr>=d.start && dateStr<=d.end) || null;
 }
 function refreshDestinationUI(){
   const listEl = document.getElementById('destList');
@@ -1386,17 +1380,13 @@ function refreshDestinationUI(){
 }
 function addDestination(){
   const name = document.getElementById('m-destnew-name').value.trim();
-  const start = document.getElementById('m-destnew-start').value;
-  const end = document.getElementById('m-destnew-end').value;
   if(!name) return;
   snapshotForUndo();
   if(!data.trip.destinations) data.trip.destinations = [];
-  data.trip.destinations.push({id:cid(), name, start, end});
+  data.trip.destinations.push({id:cid(), name});
   data.trip.destination = data.trip.destinations.map(d=>d.name).join(', ');
   persist();
   document.getElementById('m-destnew-name').value = '';
-  document.getElementById('m-destnew-start').value = '';
-  document.getElementById('m-destnew-end').value = '';
   refreshDestinationUI();
 }
 function removeDestination(id){
@@ -1412,19 +1402,14 @@ function openTripSettingsModal(){
     <div class="modal-head"><h2>Trip & sync</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <label>Trip name</label>
     <input type="text" id="m-tripname" value="${escapeHtml(t.name||'')}">
-    <label>Destinations (cities, states, or countries — each with its own dates)</label>
+    <label>Destinations (cities, states, or countries)</label>
     <div id="destList">${renderDestList(t.destinations||[])}</div>
-    <div class="card" style="margin:8px 0;">
-      <label>Name</label>
-      <input type="text" id="m-destnew-name" placeholder="e.g. Kauai">
-      <div class="row">
-        <div><label>Start date</label><input type="date" id="m-destnew-start"></div>
-        <div><label>End date</label><input type="date" id="m-destnew-end"></div>
-      </div>
-      <button type="button" class="btn btn-ghost btn-block" style="margin-top:8px;" onclick="addDestination()">+ Add destination</button>
-    </div>
-    <small class="hint">Days that fall in a destination's date range group automatically under it — set the trip's overall start/end below too so every day still gets created.</small>
     <div class="row">
+      <input type="text" id="m-destnew-name" placeholder="e.g. Kauai">
+      <button type="button" class="btn btn-ghost" style="flex:0 0 auto;" onclick="addDestination()">+ Add</button>
+    </div>
+    <small class="hint">Assign a destination to each day from the Days tab (tap the date) and to each place from its edit screen — that's what groups them.</small>
+    <div class="row" style="margin-top:10px;">
       <div><label>Start date</label><input type="date" id="m-start" value="${t.start||''}"></div>
       <div><label>End date</label><input type="date" id="m-end" value="${t.end||''}"></div>
     </div>
@@ -1509,11 +1494,18 @@ function openDayTitleModal(){
   const day = data.days.find(d=>d.id===activeDayId);
   if(!day) return;
   const html = `
-    <div class="modal-head"><h2>Title this day</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
+    <div class="modal-head"><h2>Edit this day</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <label>Title (optional)</label>
     <input type="text" id="m-daytitle" placeholder="e.g. Hiking Day" value="${escapeHtml(day.label||'')}">
     <small class="hint">${day.date?"Shown alongside the date.":"Shown in place of a date, since this day doesn't have one."}</small>
-    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="saveDayTitle()">Save title</button>
+    ${(data.trip.destinations&&data.trip.destinations.length)?`
+    <label style="margin-top:12px;">Destination</label>
+    <select id="m-daydestination">
+      <option value="">— Not set —</option>
+      ${data.trip.destinations.map(d=>`<option value="${d.id}" ${day.destinationId===d.id?'selected':''}>${escapeHtml(d.name)}</option>`).join('')}
+    </select>
+    <small class="hint">Groups this day under that destination in the 📅 day list.</small>`:''}
+    <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="saveDayTitle()">Save</button>
   `;
   showModal(html);
   setTimeout(()=>{ const f=document.getElementById('m-daytitle'); if(f){ f.focus(); f.select(); } }, 30);
@@ -1523,7 +1515,9 @@ function saveDayTitle(){
   if(!day) return;
   snapshotForUndo();
   day.label = document.getElementById('m-daytitle').value.trim();
-  persist(); renderDays(); closeModal(); toast('Title saved');
+  const destSel = document.getElementById('m-daydestination');
+  if(destSel) day.destinationId = destSel.value || null;
+  persist(); renderDays(); closeModal(); toast('Saved');
 }
 function sortedDays(){
   return [...data.days].sort((a,b)=> (a.date||'9999-99-99').localeCompare(b.date||'9999-99-99'));
@@ -1591,10 +1585,9 @@ function openDayListModal(){
   if(!days.length){
     rowsHtml = `<div style="padding:10px 0; color:var(--ink-soft); font-size:13px;">No days yet — add one below.</div>`;
   } else if(data.trip.destinations && data.trip.destinations.length){
-    const groups = [...data.trip.destinations].sort((a,b)=>(a.start||'9999').localeCompare(b.start||'9999'));
     const used = new Set();
-    groups.forEach(dest=>{
-      const inGroup = days.filter(d=> d.date && dest.start && dest.end && d.date>=dest.start && d.date<=dest.end);
+    data.trip.destinations.forEach(dest=>{
+      const inGroup = days.filter(d=> d.destinationId===dest.id);
       if(inGroup.length){
         rowsHtml += `<div class="day-list-group-header">${escapeHtml(dest.name)}</div>`;
         inGroup.forEach(d=>{ used.add(d.id); rowsHtml += dayListRowHtml(d, days.indexOf(d)); });
@@ -1602,7 +1595,7 @@ function openDayListModal(){
     });
     const others = days.filter(d=>!used.has(d.id));
     if(others.length){
-      rowsHtml += `<div class="day-list-group-header">Other days</div>`;
+      rowsHtml += `<div class="day-list-group-header">${data.trip.destinations.length ? 'Not assigned' : 'Days'}</div>`;
       others.forEach(d=>{ rowsHtml += dayListRowHtml(d, days.indexOf(d)); });
     }
   } else {
