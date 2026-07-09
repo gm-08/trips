@@ -277,15 +277,22 @@
   .places-table td{padding:9px 10px; border-bottom:1px dashed var(--line); max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .places-table th:first-child, .places-table td:first-child{
     position:sticky; left:0; z-index:1; background:var(--card);
-    box-shadow:2px 0 4px -2px rgba(36,49,43,0.15); max-width:120px;
+    box-shadow:2px 0 4px -2px rgba(36,49,43,0.15); max-width:150px; white-space:normal;
   }
   .places-table th:first-child{z-index:3;}
+  .places-table th:nth-child(2), .places-table td:nth-child(2){
+    width:26px; min-width:26px; max-width:26px; padding-left:6px; padding-right:6px; text-align:center;
+  }
   .places-table tbody tr{cursor:pointer;}
   .places-table tbody tr:active{background:var(--paper-dark);}
   .mustdo-pill{font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:10px; white-space:nowrap;}
   .mustdo-pill.mustdo-yes{background:#DDEDE3; color:#2B6B47;}
   .mustdo-pill.mustdo-maybe{background:#F5E9C9; color:#8A6A17;}
   .mustdo-pill.mustdo-meh{background:#EFE3DC; color:#8A5A42;}
+  .mustdo-dot{display:inline-block; width:13px; height:13px; border-radius:50%; vertical-align:middle;}
+  .mustdo-dot-yes{background:#3BA55D;}
+  .mustdo-dot-maybe{background:#E0B23C;}
+  .mustdo-dot-meh{background:#E0762E;}
   .filter-card .row + .row{margin-top:8px;}
   .filter-card select, .filter-card input{font-size:13px;}
   .sync-status{font-size:12px; color:var(--ink-soft); margin-top:8px;}
@@ -2312,7 +2319,7 @@ document.addEventListener('keydown', e=>{
 /* ---------- places ---------- */
 const PLACE_COLUMNS = [
   {key:'name', label:'Name'},
-  {key:'mustDo', label:'Must do?'},
+  {key:'mustDo', label:''},
   {key:'type', label:'Type'},
   {key:'subtype', label:'Subtype'},
   {key:'area', label:'Area'},
@@ -2438,11 +2445,16 @@ function renderPlaces(){
   }
   tbody.innerHTML = rows.map(p=>`
     <tr onclick="openPlaceModal('${p.id}')">
-      <td>${escapeHtml(p.name)} ${isPlaceScheduled(p.id)
-        ? `<a href="#" onclick="event.stopPropagation(); event.preventDefault(); openScheduledForPlaceModal('${p.id}')" title="Already scheduled — tap to view or add another" style="text-decoration:none;">✅</a>`
-        : `<a href="#" onclick="event.stopPropagation(); event.preventDefault(); openAddToDayPicker('${p.id}')" title="Add to Day" style="text-decoration:none;">➕</a>`
-      }</td>
-      <td>${p.mustDo?`<span class="mustdo-pill mustdo-${p.mustDo.toLowerCase()}">${escapeHtml(p.mustDo)}</span>`:''}</td>
+      <td>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:6px;">
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;">${escapeHtml(p.name)}</span>
+          ${isPlaceScheduled(p.id)
+            ? `<a href="#" onclick="event.stopPropagation(); event.preventDefault(); openScheduledForPlaceModal('${p.id}')" title="Already scheduled — tap to view or add another" style="text-decoration:none; flex:0 0 auto;">✅</a>`
+            : `<a href="#" onclick="event.stopPropagation(); event.preventDefault(); openAddToDayPicker('${p.id}')" title="Add to Day" style="text-decoration:none; flex:0 0 auto;">➕</a>`
+          }
+        </div>
+      </td>
+      <td>${p.mustDo?`<span class="mustdo-dot mustdo-dot-${p.mustDo.toLowerCase()}" title="${escapeHtml(p.mustDo)}"></span>`:''}</td>
       <td>${escapeHtml(p.type||'')}</td>
       <td>${escapeHtml(p.subtype||'')}</td>
       <td>${escapeHtml(p.area||'')}</td>
