@@ -47,7 +47,7 @@
   #app{position:relative; z-index:1; max-width:560px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column;}
 
   header.top{
-    padding:22px 18px 14px;
+    padding:calc(18px + env(safe-area-inset-top)) 18px 14px;
     border-bottom:1px solid var(--line);
     background:linear-gradient(180deg, var(--paper) 0%, var(--paper-dark) 100%);
   }
@@ -180,6 +180,14 @@
     transition:box-shadow .15s;
   }
   .cal-block.dragging{cursor:grabbing; z-index:4; box-shadow:0 4px 14px rgba(0,0,0,0.35); opacity:0.92;}
+  .cal-block-resize{
+    position:absolute; left:0; right:0; bottom:0; height:10px; cursor:ns-resize; touch-action:none;
+  }
+  .cal-block-resize::after{
+    content:""; position:absolute; left:50%; bottom:2px; transform:translateX(-50%);
+    width:22px; height:3px; border-radius:2px; background:rgba(255,255,255,0.6);
+  }
+  .cal-block.resizing{box-shadow:0 4px 14px rgba(0,0,0,0.35); opacity:0.92;}
   .cal-block-title{font-weight:700; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .cal-block-sub{font-size:10.5px; opacity:0.88; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .cal-block-map{position:absolute; top:2px; right:5px; font-size:11px; text-decoration:none; line-height:1;}
@@ -1053,6 +1061,10 @@ svg.leaflet-image-layer.leaflet-interactive path {
         <div class="section-title" style="margin:0 0 8px;">Unscheduled</div>
         <div id="unscheduledList"></div>
       </div>
+      <div class="card" id="allNotesCard" style="display:none; margin-top:12px;">
+        <div class="section-title" style="margin:0 0 8px;">Notes on today's plan</div>
+        <div id="allNotesList"></div>
+      </div>
       <div class="section-title">Notes for this day</div>
       <div class="card">
         <textarea id="f-daynotes" placeholder="Anything specific to this day…" style="min-height:100px;"></textarea>
@@ -1639,7 +1651,8 @@ function renderDayNav(){
   const day = days[idx];
   const dateStr = day.date ? fmtDateWeekday(day.date) : ('Day '+(idx+1));
   dateEl.textContent = dateStr;
-  titleEl.textContent = day.label || '';
+  const destName = day.destinationId ? (((data.trip.destinations||[]).find(d=>d.id===day.destinationId)||{}).name || '') : '';
+  titleEl.textContent = [destName, day.label].filter(Boolean).join(' — ');
   prevBtn.classList.toggle('disabled', idx<=0);
   nextBtn.classList.toggle('disabled', idx>=days.length-1);
 }
@@ -1706,6 +1719,33 @@ function renderDayNotes(){
   if(!el) return;
   const day = data.days.find(d=>d.id===activeDayId);
   el.value = (day && day.notes) || '';
+  renderAllNotesForDay(day);
+}
+function renderAllNotesForDay(day){
+  const card = document.getElementById('allNotesCard');
+  const list = document.getElementById('allNotesList');
+  if(!card || !list) return;
+  if(!day){ card.style.display='none'; return; }
+  const entries = [];
+  (day.activities||[]).slice().sort((a,b)=>(a.startTime||'99:99').localeCompare(b.startTime||'99:99')).forEach(b=>{
+    if(b.placeId){
+      const p = data.places.find(pl=>pl.id===b.placeId);
+      if(p && p.notes){
+        entries.push({title: p.name, time: b.startTime?formatTimeForDisplay(b.startTime):'Unscheduled', notes: p.notes});
+      }
+    }
+    if(b.text && !b.placeId){
+      entries.push({title: b.startTime?formatTimeForDisplay(b.startTime):'Unscheduled', time:null, notes: b.text});
+    }
+  });
+  if(!entries.length){ card.style.display='none'; list.innerHTML=''; return; }
+  card.style.display='';
+  list.innerHTML = entries.map(e=>`
+    <div class="activity">
+      <div class="activity-title">${escapeHtml(e.title)}${e.time?` <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">· ${escapeHtml(e.time)}</span>`:''}</div>
+      <div class="activity-detail" style="white-space:pre-wrap;">${escapeHtml(e.notes)}</div>
+    </div>
+  `).join('');
 }
 function saveDayNotes(){
   const day = data.days.find(d=>d.id===activeDayId);
@@ -1760,7 +1800,7 @@ function renderCalendar(){
     const top = ((startMin/60) - GRID_START_HOUR) * ROW_HEIGHT;
     const height = Math.max(((endMin-startMin)/60) * ROW_HEIGHT - 2, 22);
     const color = colorForBlock(b);
-    blocksHtml += `<div class="cal-block" data-day-id="${day.id}" data-block-id="${b.id}" style="top:${top}px; height:${height}px; background:${color};">${blockInnerHtml(b)}</div>`;
+    blocksHtml += `<div class="cal-block" data-day-id="${day.id}" data-block-id="${b.id}" style="top:${top}px; height:${height}px; background:${color};">${blockInnerHtml(b)}<div class="cal-block-resize" data-day-id="${day.id}" data-block-id="${b.id}"></div></div>`;
   });
 
   grid.style.height = (totalHours*ROW_HEIGHT)+'px';
@@ -1843,11 +1883,33 @@ function updateSelectionOverlay(){
   overlay.style.height = height+'px';
 }
 let blockDragState = {active:false, dragging:false, el:null, dayId:null, blockId:null, startY:0, startX:0, startTop:0, origStartMin:0, origEndMin:0, timer:null};
+let blockResizeState = {active:false, el:null, blockEl:null, dayId:null, blockId:null, startY:0, startHeight:0, origStartMin:0, origEndMin:0};
 const BLOCK_DRAG_HOLD_MS = 1000;
 function initCalendarEvents(){
   const grid = document.getElementById('calendarGrid');
   grid.addEventListener('pointerdown', e=>{
     if(e.target.closest && e.target.closest('a')) return; // let the map-icon link work natively
+
+    const resizeEl = e.target.closest ? e.target.closest('.cal-block-resize') : null;
+    if(resizeEl){
+      const dayId = resizeEl.dataset.dayId, blockId = resizeEl.dataset.blockId;
+      const day = data.days.find(d=>d.id===dayId);
+      const b = day && day.activities.find(a=>a.id===blockId);
+      const blockEl = resizeEl.closest('.cal-block');
+      if(!b || !blockEl) return;
+      blockResizeState.active = true;
+      blockResizeState.el = resizeEl;
+      blockResizeState.blockEl = blockEl;
+      blockResizeState.dayId = dayId;
+      blockResizeState.blockId = blockId;
+      blockResizeState.startY = e.clientY;
+      blockResizeState.startHeight = parseFloat(blockEl.style.height) || ROW_HEIGHT;
+      blockResizeState.origStartMin = timeToMinutes(b.startTime);
+      blockResizeState.origEndMin = b.endTime ? timeToMinutes(b.endTime) : blockResizeState.origStartMin+60;
+      blockEl.classList.add('resizing');
+      e.preventDefault();
+      return;
+    }
 
     const blockEl = e.target.closest ? e.target.closest('.cal-block') : null;
     if(blockEl){
@@ -1890,6 +1952,13 @@ function initCalendarEvents(){
     }, 220);
   });
   grid.addEventListener('pointermove', e=>{
+    if(blockResizeState.active){
+      e.preventDefault();
+      const dy = e.clientY - blockResizeState.startY;
+      const newHeight = Math.max(blockResizeState.startHeight + dy, 18);
+      blockResizeState.blockEl.style.height = newHeight + 'px';
+      return;
+    }
     if(blockDragState.active){
       const dy = e.clientY - blockDragState.startY;
       const dx = e.clientX - blockDragState.startX;
@@ -1920,6 +1989,24 @@ function initCalendarEvents(){
     if(row){ pdState.endHour = parseInt(row.dataset.hour,10); updateSelectionOverlay(); }
   });
   window.addEventListener('pointerup', ()=>{
+    if(blockResizeState.active){
+      const day = data.days.find(d=>d.id===blockResizeState.dayId);
+      const b = day && day.activities.find(a=>a.id===blockResizeState.blockId);
+      if(b){
+        const finalHeight = parseFloat(blockResizeState.blockEl.style.height) || blockResizeState.startHeight;
+        const rawDurationMin = (finalHeight / ROW_HEIGHT) * 60;
+        let newDuration = Math.round(rawDurationMin / 30) * 30;
+        newDuration = Math.max(newDuration, 30); // minimum half-hour block
+        let newEndMin = blockResizeState.origStartMin + newDuration;
+        newEndMin = Math.min(newEndMin, GRID_END_HOUR*60);
+        b.endTime = minutesToTime(newEndMin);
+        persist();
+      }
+      blockResizeState.blockEl.classList.remove('resizing');
+      blockResizeState.active = false;
+      renderCalendar();
+      return;
+    }
     if(blockDragState.active){
       clearTimeout(blockDragState.timer);
       const wasDragging = blockDragState.dragging;
@@ -2125,6 +2212,7 @@ function openBlockModal(dayId, blockId, prefillStartHour, prefillEndHour){
     <div id="m-bplacepreview" class="card" style="margin:8px 0 0; display:none;"></div>
     <label id="m-btext-label">${hasPlace?'Notes (optional)':"What's the plan?"}</label>
     <textarea id="m-btext" placeholder="${hasPlace?'Anything extra for this stop':'Free write anything you want here'}">${existing?escapeHtml(existing.text||''):''}</textarea>
+    <small class="hint" id="m-btext-hint" style="${hasPlace?'':'display:none;'}">Saved here and added to this place's Notes in the Places list.</small>
     <div class="row" style="margin-top:14px;">
       ${existing?`<button class="btn btn-danger" onclick="deleteBlock('${dayId}','${existing.id}')">Delete</button>`:''}
       <button class="btn btn-primary" onclick="saveBlock('${dayId}','${existing?existing.id:''}')">Save block</button>
@@ -2148,7 +2236,10 @@ function renderBlockPlacePreview(){
 }
 function updateBlockTextLabel(){
   const sel = document.getElementById('m-bplace');
-  document.getElementById('m-btext-label').textContent = sel.value ? 'Notes (optional)' : "What's the plan?";
+  const hasPlace = !!sel.value;
+  document.getElementById('m-btext-label').textContent = hasPlace ? 'Notes (optional)' : "What's the plan?";
+  const hintEl = document.getElementById('m-btext-hint');
+  if(hintEl) hintEl.style.display = hasPlace ? '' : 'none';
 }
 function saveBlock(dayId, blockId){
   snapshotForUndo();
@@ -2177,6 +2268,15 @@ function saveBlock(dayId, blockId){
     day.activities[idx] = obj;
   } else {
     day.activities.push(obj);
+  }
+  if(obj.placeId && obj.text){
+    const pIdx = data.places.findIndex(pl=>pl.id===obj.placeId);
+    if(pIdx>-1){
+      const p = data.places[pIdx];
+      if(!p.notes || !p.notes.includes(obj.text)){
+        p.notes = p.notes ? p.notes + '\n' + obj.text : obj.text;
+      }
+    }
   }
   day.activities.sort((a,b)=> (a.startTime||'99:99').localeCompare(b.startTime||'99:99'));
   persist(); renderDays(); closeModal(); toast('Saved');
@@ -2781,7 +2881,11 @@ function openAddToDayPicker(placeId){
     <div class="modal-head"><h2>Add to a day</h2><button class="modal-close" onclick="closeModal()">&times;</button></div>
     <label>Day</label>
     <select id="m-addtodayselect">${options}</select>
-    <small class="hint">Adds this place as an unscheduled block — set a time for it anytime from the Days tab.</small>
+    <div class="row">
+      <div><label>Start time (optional)</label><input type="text" id="m-addtoday-start" placeholder="e.g. 11am"></div>
+      <div><label>End time (optional)</label><input type="text" id="m-addtoday-end" placeholder="e.g. 1:30pm"></div>
+    </div>
+    <small class="hint">Leave both blank to add it as unscheduled — you can set a time anytime from the Days tab.</small>
     <button class="btn btn-primary btn-block" style="margin-top:14px" onclick="confirmAddToDay('${placeId}')">Add</button>
   `;
   showModal(html);
@@ -2790,11 +2894,23 @@ function confirmAddToDay(placeId){
   const dayId = document.getElementById('m-addtodayselect').value;
   const day = data.days.find(d=>d.id===dayId);
   if(!day) return;
+  const startRaw = document.getElementById('m-addtoday-start').value.trim();
+  const endRaw = document.getElementById('m-addtoday-end').value.trim();
+  let startTime = '', endTime = '';
+  if(startRaw){
+    startTime = parseTimeString(startRaw);
+    if(!startTime){ toast('Couldn\'t understand that start time — try "11am" or "13:30"'); return; }
+  }
+  if(endRaw){
+    endTime = parseTimeString(endRaw);
+    if(!endTime){ toast('Couldn\'t understand that end time — try "1:30pm" or "13:30"'); return; }
+  }
   snapshotForUndo();
-  day.activities.push({id:cid(), startTime:'', endTime:'', placeId, text:''});
+  day.activities.push({id:cid(), startTime, endTime, placeId, text:''});
+  day.activities.sort((a,b)=> (a.startTime||'99:99').localeCompare(b.startTime||'99:99'));
   persist();
   closeModal();
-  toast('Added — set a time for it in the Days tab');
+  toast(startTime ? 'Added to the calendar' : 'Added — set a time for it in the Days tab');
 }
 function placeMapUrl(p){
   if(p.mapsUrl) return p.mapsUrl;
